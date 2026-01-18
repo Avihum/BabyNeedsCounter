@@ -106,7 +106,9 @@ class BackendService(private val context: Context) {
                         lastEventTime = jsonResponse.optString("lastEventTime", "—"),
                         poopPeeCount = jsonResponse.optInt("poopPeeCount", 0),
                         peeCount = jsonResponse.optInt("peeCount", 0),
-                        feedCount = jsonResponse.optInt("feedCount", 0)
+                        feedCount = jsonResponse.optInt("feedCount", 0),
+                        peeFeedCount = jsonResponse.optInt("peeFeedCount", 0),
+                        poopFeedCount = jsonResponse.optInt("poopFeedCount", 0)
                     )
                 } else {
                     Log.e("BackendService", "Failed to fetch stats: ${response.code}")
@@ -135,7 +137,9 @@ class BackendService(private val context: Context) {
         val lastEventTime: String,
         val poopPeeCount: Int,
         val peeCount: Int,
-        val feedCount: Int
+        val feedCount: Int,
+        val peeFeedCount: Int = 0,
+        val poopFeedCount: Int = 0
     )
     
     companion object {

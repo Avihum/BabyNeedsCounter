@@ -48,15 +48,23 @@ class BabyNeedsWidget : AppWidgetProvider() {
         val eventInfo = when (intent.action) {
             ACTION_POOP_PEE -> {
                 Log.d("BabyNeeds", "Widget: Logged Poop & Pee")
-                Pair("poop_pee", "💩 Poop & Pee")
+                Pair("💩💧", "💩 Poop & Pee")
             }
             ACTION_PEE -> {
                 Log.d("BabyNeeds", "Widget: Logged Pee Only")
-                Pair("pee", "💧 Pee")
+                Pair("💧", "💧 Pee")
             }
             ACTION_FEED -> {
                 Log.d("BabyNeeds", "Widget: Logged Feed (Breastmilk)")
-                Pair("feed", "🐄 Feed")
+                Pair("🐄", "🐄 Feed")
+            }
+            ACTION_PEE_FEED -> {
+                Log.d("BabyNeeds", "Widget: Logged Pee + Feed")
+                Pair("💧🐄", "💧🐄 Pee + Feed")
+            }
+            ACTION_POOP_FEED -> {
+                Log.d("BabyNeeds", "Widget: Logged Poop + Feed")
+                Pair("💩🐄", "💩🐄 Poop + Feed")
             }
             else -> null
         }
@@ -78,7 +86,7 @@ class BabyNeedsWidget : AppWidgetProvider() {
             val views = RemoteViews(context.packageName, R.layout.widget_baby_needs)
             
             if (isLoading) {
-                views.setTextViewText(R.id.widget_status_text, "Syncing...")
+                views.setTextViewText(R.id.widget_status_text, "Saving...")
                 views.setViewVisibility(R.id.widget_last_event, View.GONE)
             } else {
                 val timeFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
@@ -99,6 +107,14 @@ class BabyNeedsWidget : AppWidgetProvider() {
             views.setOnClickPendingIntent(
                 R.id.widget_btn_feed,
                 getPendingSelfIntent(context, ACTION_FEED)
+            )
+            views.setOnClickPendingIntent(
+                R.id.widget_btn_pee_feed,
+                getPendingSelfIntent(context, ACTION_PEE_FEED)
+            )
+            views.setOnClickPendingIntent(
+                R.id.widget_btn_poop_feed,
+                getPendingSelfIntent(context, ACTION_POOP_FEED)
             )
             
             appWidgetManager.updateAppWidget(widgetId, views)
@@ -125,27 +141,27 @@ class BabyNeedsWidget : AppWidgetProvider() {
                     Handler(Looper.getMainLooper()).post {
                         if (success) {
                             Log.d("BabyNeeds", "Widget: Successfully synced to Google Sheets")
-                            showFeedback(context, "$displayName logged", false)
+                            showFeedback(context, "$displayName tracked", false)
                         } else {
                             Log.e("BabyNeeds", "Widget: Failed to sync to Google Sheets")
-                            showFeedback(context, "Failed to sync", false)
+                            showFeedback(context, "Couldn't save", false)
                         }
                         
                         // Reset to default after 3 seconds
                         Handler(Looper.getMainLooper()).postDelayed({
-                            showFeedback(context, "Tap a button to log", false)
+                            showFeedback(context, "Ready to track", false)
                         }, 3000)
                     }
                 } else {
                     Log.w("BabyNeeds", "Widget: No Google Sheet URL configured")
                     Handler(Looper.getMainLooper()).post {
-                        showFeedback(context, "Configure URL in app", false)
+                        showFeedback(context, "Open app to set up", false)
                     }
                 }
             } catch (e: Exception) {
                 Log.e("BabyNeeds", "Widget: Error syncing to backend", e)
                 Handler(Looper.getMainLooper()).post {
-                    showFeedback(context, "Error syncing", false)
+                    showFeedback(context, "Couldn't save", false)
                 }
             }
         }
@@ -155,31 +171,45 @@ class BabyNeedsWidget : AppWidgetProvider() {
         private const val ACTION_POOP_PEE = "com.example.babyneedscounter.ACTION_POOP_PEE"
         private const val ACTION_PEE = "com.example.babyneedscounter.ACTION_PEE"
         private const val ACTION_FEED = "com.example.babyneedscounter.ACTION_FEED"
+        private const val ACTION_PEE_FEED = "com.example.babyneedscounter.ACTION_PEE_FEED"
+        private const val ACTION_POOP_FEED = "com.example.babyneedscounter.ACTION_POOP_FEED"
 
         internal fun updateAppWidget(
             context: Context,
             appWidgetManager: AppWidgetManager,
             appWidgetId: Int
         ) {
-            // Construct the RemoteViews object
-            val views = RemoteViews(context.packageName, R.layout.widget_baby_needs)
+            try {
+                // Construct the RemoteViews object
+                val views = RemoteViews(context.packageName, R.layout.widget_baby_needs)
 
-            // Set up button click intents
-            views.setOnClickPendingIntent(
-                R.id.widget_btn_poop_pee,
-                getPendingSelfIntent(context, ACTION_POOP_PEE)
-            )
-            views.setOnClickPendingIntent(
-                R.id.widget_btn_pee,
-                getPendingSelfIntent(context, ACTION_PEE)
-            )
-            views.setOnClickPendingIntent(
-                R.id.widget_btn_feed,
-                getPendingSelfIntent(context, ACTION_FEED)
-            )
+                // Set up button click intents
+                views.setOnClickPendingIntent(
+                    R.id.widget_btn_poop_pee,
+                    getPendingSelfIntent(context, ACTION_POOP_PEE)
+                )
+                views.setOnClickPendingIntent(
+                    R.id.widget_btn_pee,
+                    getPendingSelfIntent(context, ACTION_PEE)
+                )
+                views.setOnClickPendingIntent(
+                    R.id.widget_btn_feed,
+                    getPendingSelfIntent(context, ACTION_FEED)
+                )
+                views.setOnClickPendingIntent(
+                    R.id.widget_btn_pee_feed,
+                    getPendingSelfIntent(context, ACTION_PEE_FEED)
+                )
+                views.setOnClickPendingIntent(
+                    R.id.widget_btn_poop_feed,
+                    getPendingSelfIntent(context, ACTION_POOP_FEED)
+                )
 
-            // Instruct the widget manager to update the widget
-            appWidgetManager.updateAppWidget(appWidgetId, views)
+                // Instruct the widget manager to update the widget
+                appWidgetManager.updateAppWidget(appWidgetId, views)
+            } catch (e: Exception) {
+                Log.e("BabyNeedsWidget", "Error updating widget", e)
+            }
         }
 
         private fun getPendingSelfIntent(context: Context, action: String): PendingIntent {

@@ -15,6 +15,7 @@ class SettingsManager(private val context: Context) {
     
     companion object {
         private val GOOGLE_SHEET_URL_KEY = stringPreferencesKey("google_sheet_url")
+        private val GOOGLE_SHEET_VIEW_URL_KEY = stringPreferencesKey("google_sheet_view_url")
     }
     
     val googleSheetUrl: Flow<String> = context.dataStore.data
@@ -22,9 +23,20 @@ class SettingsManager(private val context: Context) {
             preferences[GOOGLE_SHEET_URL_KEY] ?: ""
         }
     
+    val googleSheetViewUrl: Flow<String> = context.dataStore.data
+        .map { preferences ->
+            preferences[GOOGLE_SHEET_VIEW_URL_KEY] ?: ""
+        }
+    
     suspend fun saveGoogleSheetUrl(url: String) {
         context.dataStore.edit { preferences ->
             preferences[GOOGLE_SHEET_URL_KEY] = url
+        }
+    }
+    
+    suspend fun saveGoogleSheetViewUrl(url: String) {
+        context.dataStore.edit { preferences ->
+            preferences[GOOGLE_SHEET_VIEW_URL_KEY] = url
         }
     }
 }

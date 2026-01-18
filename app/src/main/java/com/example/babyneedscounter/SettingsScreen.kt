@@ -30,15 +30,23 @@ fun SettingsScreen(
     val scope = rememberCoroutineScope()
     
     var googleSheetUrl by remember { mutableStateOf("") }
+    var googleSheetViewUrl by remember { mutableStateOf("") }
     var isSaving by remember { mutableStateOf(false) }
     var showSavedMessage by remember { mutableStateOf(false) }
     var isTesting by remember { mutableStateOf(false) }
     var testResult by remember { mutableStateOf("") }
     
-    // Load saved URL
+    // Load saved URLs
     LaunchedEffect(Unit) {
-        settingsManager.googleSheetUrl.collect { url ->
-            googleSheetUrl = url
+        launch {
+            settingsManager.googleSheetUrl.collect { url ->
+                googleSheetUrl = url
+            }
+        }
+        launch {
+            settingsManager.googleSheetViewUrl.collect { url ->
+                googleSheetViewUrl = url
+            }
         }
     }
     
@@ -86,11 +94,11 @@ fun SettingsScreen(
                         googleSheetUrl = it
                         showSavedMessage = false
                     },
-                    label = { Text("Google Sheets Web App URL") },
+                    label = { Text("Google Sheets Web App URL", fontSize = 16.sp) },
                     placeholder = { 
                         Text(
                             "https://script.google.com/macros/s/.../exec",
-                            fontSize = 12.sp,
+                            fontSize = 14.sp,
                             color = TextSecondary
                         ) 
                     },
@@ -101,10 +109,38 @@ fun SettingsScreen(
                         unfocusedBorderColor = MaterialTheme.colorScheme.outline
                     ),
                     singleLine = false,
-                    maxLines = 3
+                    maxLines = 3,
+                    textStyle = MaterialTheme.typography.bodyLarge.copy(fontSize = 15.sp)
                 )
                 
-                Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(16.dp))
+                
+                OutlinedTextField(
+                    value = googleSheetViewUrl,
+                    onValueChange = { 
+                        googleSheetViewUrl = it
+                        showSavedMessage = false
+                    },
+                    label = { Text("Google Sheet View URL (for viewing)", fontSize = 16.sp) },
+                    placeholder = { 
+                        Text(
+                            "https://docs.google.com/spreadsheets/d/.../edit",
+                            fontSize = 14.sp,
+                            color = TextSecondary
+                        ) 
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = MaterialTheme.colorScheme.primary,
+                        unfocusedBorderColor = MaterialTheme.colorScheme.outline
+                    ),
+                    singleLine = false,
+                    maxLines = 3,
+                    textStyle = MaterialTheme.typography.bodyLarge.copy(fontSize = 15.sp)
+                )
+                
+                Spacer(modifier = Modifier.height(16.dp))
                 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -115,24 +151,26 @@ fun SettingsScreen(
                             scope.launch {
                                 isSaving = true
                                 settingsManager.saveGoogleSheetUrl(googleSheetUrl)
+                                settingsManager.saveGoogleSheetViewUrl(googleSheetViewUrl)
                                 isSaving = false
                                 showSavedMessage = true
                                 testResult = ""
-                                Log.d("Settings", "Saved URL: $googleSheetUrl")
+                                Log.d("Settings", "Saved Web App URL: $googleSheetUrl")
+                                Log.d("Settings", "Saved View URL: $googleSheetViewUrl")
                             }
                         },
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier.weight(1f).height(56.dp),
                         enabled = !isSaving && !isTesting,
                         shape = RoundedCornerShape(12.dp)
                     ) {
                         if (isSaving) {
                             CircularProgressIndicator(
-                                modifier = Modifier.size(20.dp),
+                                modifier = Modifier.size(24.dp),
                                 color = MaterialTheme.colorScheme.onPrimary,
                                 strokeWidth = 2.dp
                             )
                         } else {
-                            Text("Save")
+                            Text("Save", fontSize = 18.sp, fontWeight = FontWeight.Bold)
                         }
                     }
                     
@@ -146,7 +184,7 @@ fun SettingsScreen(
                                 
                                 val testEvent = BackendService.BabyEvent(
                                     timestamp = BackendService.getCurrentTimestamp(),
-                                    type = "test",
+                                    type = "🧪",
                                     notes = "Test from settings"
                                 )
                                 
@@ -159,17 +197,17 @@ fun SettingsScreen(
                                 isTesting = false
                             }
                         },
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier.weight(1f).height(56.dp),
                         enabled = !isSaving && !isTesting && googleSheetUrl.isNotEmpty(),
                         shape = RoundedCornerShape(12.dp)
                     ) {
                         if (isTesting) {
                             CircularProgressIndicator(
-                                modifier = Modifier.size(20.dp),
+                                modifier = Modifier.size(24.dp),
                                 strokeWidth = 2.dp
                             )
                         } else {
-                            Text("Test")
+                            Text("Test", fontSize = 18.sp, fontWeight = FontWeight.Bold)
                         }
                     }
                 }
@@ -178,7 +216,8 @@ fun SettingsScreen(
                     Text(
                         text = "✓ Settings saved successfully",
                         color = MaterialTheme.colorScheme.primary,
-                        fontSize = 14.sp,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.SemiBold,
                         modifier = Modifier.padding(top = 8.dp)
                     )
                 }
@@ -190,7 +229,8 @@ fun SettingsScreen(
                             MaterialTheme.colorScheme.primary 
                         else 
                             MaterialTheme.colorScheme.error,
-                        fontSize = 14.sp,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.SemiBold,
                         modifier = Modifier.padding(top = 8.dp)
                     )
                 }
@@ -226,12 +266,12 @@ fun SettingsScreen(
                     
                     InstructionStep(
                         number = "3",
-                        text = "Create a doPost(e) function to handle incoming data"
+                        text = "Use the GoogleAppsScript.js code from the project"
                     )
                     
                     InstructionStep(
                         number = "4",
-                        text = "Deploy as Web App and copy the URL here"
+                        text = "Deploy as Web App and copy both URLs (Web App URL for API, Sheet URL for viewing)"
                     )
                 }
             }
@@ -277,7 +317,7 @@ fun InstructionStep(
     ) {
         Box(
             modifier = Modifier
-                .size(28.dp)
+                .size(32.dp)
                 .background(
                     MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
                     shape = RoundedCornerShape(8.dp)
@@ -287,6 +327,7 @@ fun InstructionStep(
             Text(
                 text = number,
                 style = MaterialTheme.typography.labelLarge,
+                fontSize = 16.sp,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.primary
             )
@@ -294,7 +335,8 @@ fun InstructionStep(
         
         Text(
             text = text,
-            style = MaterialTheme.typography.bodyMedium,
+            style = MaterialTheme.typography.bodyLarge,
+            fontSize = 15.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.weight(1f)
         )
