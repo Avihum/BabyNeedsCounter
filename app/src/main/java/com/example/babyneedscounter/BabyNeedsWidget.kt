@@ -69,55 +69,68 @@ class BabyNeedsWidget : AppWidgetProvider() {
             else -> null
         }
         
-        // Show feedback and sync to backend if an event was triggered
+        // Sync to backend if an event was triggered
         eventInfo?.let { (eventType, displayName) ->
-            showFeedback(context, displayName, true)
             syncToBackend(context, eventType, displayName)
         }
     }
     
-    private fun showFeedback(context: Context, message: String, isLoading: Boolean) {
+    private fun refreshStats(context: Context) {
         val appWidgetManager = AppWidgetManager.getInstance(context)
         val widgetIds = appWidgetManager.getAppWidgetIds(
             android.content.ComponentName(context, BabyNeedsWidget::class.java)
         )
         
-        for (widgetId in widgetIds) {
-            val views = RemoteViews(context.packageName, R.layout.widget_baby_needs)
-            
-            if (isLoading) {
-                views.setTextViewText(R.id.widget_status_text, "Saving...")
-                views.setViewVisibility(R.id.widget_last_event, View.GONE)
-            } else {
-                val timeFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
-                views.setTextViewText(R.id.widget_status_text, message)
-                views.setTextViewText(R.id.widget_last_event, "✓ ${timeFormat.format(Date())}")
-                views.setViewVisibility(R.id.widget_last_event, View.VISIBLE)
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        scope.launch {
+            try {
+                val settingsManager = SettingsManager(context)
+                val googleSheetUrl = settingsManager.googleSheetUrl.first()
+                
+                if (googleSheetUrl.isNotEmpty()) {
+                    val backendService = BackendService(context)
+                    val stats = backendService.fetchTodayStats(googleSheetUrl)
+                    
+                    if (stats != null) {
+                        Handler(Looper.getMainLooper()).post {
+                            for (widgetId in widgetIds) {
+                                val views = RemoteViews(context.packageName, R.layout.widget_baby_needs)
+                                
+                                // Update stats
+                                views.setTextViewText(R.id.widget_pee_count, stats.peeCount.toString())
+                                views.setTextViewText(R.id.widget_poop_count, stats.poopCount.toString())
+                                views.setTextViewText(R.id.widget_feed_time, stats.getTimeSinceLastFeed())
+                                
+                                // Re-attach click listeners
+                                views.setOnClickPendingIntent(
+                                    R.id.widget_btn_poop_pee,
+                                    getPendingSelfIntent(context, ACTION_POOP_PEE)
+                                )
+                                views.setOnClickPendingIntent(
+                                    R.id.widget_btn_pee,
+                                    getPendingSelfIntent(context, ACTION_PEE)
+                                )
+                                views.setOnClickPendingIntent(
+                                    R.id.widget_btn_feed,
+                                    getPendingSelfIntent(context, ACTION_FEED)
+                                )
+                                views.setOnClickPendingIntent(
+                                    R.id.widget_btn_pee_feed,
+                                    getPendingSelfIntent(context, ACTION_PEE_FEED)
+                                )
+                                views.setOnClickPendingIntent(
+                                    R.id.widget_btn_poop_feed,
+                                    getPendingSelfIntent(context, ACTION_POOP_FEED)
+                                )
+                                
+                                appWidgetManager.updateAppWidget(widgetId, views)
+                            }
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e("BabyNeedsWidget", "Error refreshing stats", e)
             }
-            
-            // Re-attach click listeners
-            views.setOnClickPendingIntent(
-                R.id.widget_btn_poop_pee,
-                getPendingSelfIntent(context, ACTION_POOP_PEE)
-            )
-            views.setOnClickPendingIntent(
-                R.id.widget_btn_pee,
-                getPendingSelfIntent(context, ACTION_PEE)
-            )
-            views.setOnClickPendingIntent(
-                R.id.widget_btn_feed,
-                getPendingSelfIntent(context, ACTION_FEED)
-            )
-            views.setOnClickPendingIntent(
-                R.id.widget_btn_pee_feed,
-                getPendingSelfIntent(context, ACTION_PEE_FEED)
-            )
-            views.setOnClickPendingIntent(
-                R.id.widget_btn_poop_feed,
-                getPendingSelfIntent(context, ACTION_POOP_FEED)
-            )
-            
-            appWidgetManager.updateAppWidget(widgetId, views)
         }
     }
     
@@ -137,32 +150,21 @@ class BabyNeedsWidget : AppWidgetProvider() {
                     )
                     val success = backendService.logEvent(googleSheetUrl, event)
                     
-                    // Update UI with result on main thread
+                    // Refresh stats on main thread
                     Handler(Looper.getMainLooper()).post {
                         if (success) {
-                            Log.d("BabyNeeds", "Widget: Successfully synced to Google Sheets")
-                            showFeedback(context, "$displayName tracked", false)
+                            Log.d("BabyNeeds", "Widget: Successfully synced to Google Sheets - $displayName")
+                            // Refresh stats after successful sync
+                            refreshStats(context)
                         } else {
                             Log.e("BabyNeeds", "Widget: Failed to sync to Google Sheets")
-                            showFeedback(context, "Couldn't save", false)
                         }
-                        
-                        // Reset to default after 3 seconds
-                        Handler(Looper.getMainLooper()).postDelayed({
-                            showFeedback(context, "Ready to track", false)
-                        }, 3000)
                     }
                 } else {
                     Log.w("BabyNeeds", "Widget: No Google Sheet URL configured")
-                    Handler(Looper.getMainLooper()).post {
-                        showFeedback(context, "Open app to set up", false)
-                    }
                 }
             } catch (e: Exception) {
                 Log.e("BabyNeeds", "Widget: Error syncing to backend", e)
-                Handler(Looper.getMainLooper()).post {
-                    showFeedback(context, "Couldn't save", false)
-                }
             }
         }
     }
@@ -204,6 +206,31 @@ class BabyNeedsWidget : AppWidgetProvider() {
                     R.id.widget_btn_poop_feed,
                     getPendingSelfIntent(context, ACTION_POOP_FEED)
                 )
+
+                // Fetch and display today's stats
+                val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+                scope.launch {
+                    try {
+                        val settingsManager = SettingsManager(context)
+                        val googleSheetUrl = settingsManager.googleSheetUrl.first()
+                        
+                        if (googleSheetUrl.isNotEmpty()) {
+                            val backendService = BackendService(context)
+                            val stats = backendService.fetchTodayStats(googleSheetUrl)
+                            
+                            if (stats != null) {
+                                Handler(Looper.getMainLooper()).post {
+                                    views.setTextViewText(R.id.widget_pee_count, stats.peeCount.toString())
+                                    views.setTextViewText(R.id.widget_poop_count, stats.poopCount.toString())
+                                    views.setTextViewText(R.id.widget_feed_time, stats.getTimeSinceLastFeed())
+                                    appWidgetManager.updateAppWidget(appWidgetId, views)
+                                }
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Log.e("BabyNeedsWidget", "Error fetching stats", e)
+                    }
+                }
 
                 // Instruct the widget manager to update the widget
                 appWidgetManager.updateAppWidget(appWidgetId, views)

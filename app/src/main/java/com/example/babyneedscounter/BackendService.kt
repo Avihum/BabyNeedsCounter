@@ -91,27 +91,43 @@ class BackendService(private val context: Context) {
         return withContext(Dispatchers.IO) {
             try {
                 val webAppUrl = convertToWebAppUrl(googleSheetUrl)
-                val today = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
                 
+                // TEMPORARY: Get ALL events (no filtering) for debugging
                 val request = Request.Builder()
-                    .url("$webAppUrl?date=$today")
+                    .url(webAppUrl)
                     .get()
                     .build()
                 
+                Log.d("BackendService", "Fetching stats from: $webAppUrl (ALL EVENTS - no filter for debugging)")
                 val response = client.newCall(request).execute()
                 if (response.isSuccessful) {
-                    val jsonResponse = JSONObject(response.body?.string() ?: "{}")
-                    TodayStats(
-                        totalEvents = jsonResponse.optInt("totalEvents", 0),
-                        lastEventTime = jsonResponse.optString("lastEventTime", "—"),
-                        poopPeeCount = jsonResponse.optInt("poopPeeCount", 0),
+                    val responseBody = response.body?.string() ?: "{}"
+                    Log.d("BackendService", "Stats response: $responseBody")
+                    val jsonResponse = JSONObject(responseBody)
+                    
+                    // Log debug info if available
+                    if (jsonResponse.has("debug")) {
+                        val debug = jsonResponse.getJSONObject("debug")
+                        Log.d("BackendService", "Debug info: ${debug.toString()}")
+                    }
+                    
+                    val lastFeedTimeISO = if (jsonResponse.has("lastFeedTimeISO") && !jsonResponse.isNull("lastFeedTimeISO")) {
+                        jsonResponse.getString("lastFeedTimeISO")
+                    } else {
+                        null
+                    }
+                    
+                    val stats = TodayStats(
                         peeCount = jsonResponse.optInt("peeCount", 0),
-                        feedCount = jsonResponse.optInt("feedCount", 0),
-                        peeFeedCount = jsonResponse.optInt("peeFeedCount", 0),
-                        poopFeedCount = jsonResponse.optInt("poopFeedCount", 0)
+                        poopCount = jsonResponse.optInt("poopCount", 0),
+                        lastFeedTimeISO = lastFeedTimeISO
                     )
+                    
+                    Log.d("BackendService", "Parsed stats: pee=${stats.peeCount}, poop=${stats.poopCount}, feed=${stats.getTimeSinceLastFeed()}, feedTimeISO=${stats.lastFeedTimeISO}")
+                    stats
                 } else {
                     Log.e("BackendService", "Failed to fetch stats: ${response.code}")
+                    Log.e("BackendService", "Response body: ${response.body?.string()}")
                     null
                 }
             } catch (e: Exception) {
@@ -133,18 +149,41 @@ class BackendService(private val context: Context) {
     }
     
     data class TodayStats(
-        val totalEvents: Int,
-        val lastEventTime: String,
-        val poopPeeCount: Int,
         val peeCount: Int,
-        val feedCount: Int,
-        val peeFeedCount: Int = 0,
-        val poopFeedCount: Int = 0
-    )
+        val poopCount: Int,
+        val lastFeedTimeISO: String?
+    ) {
+        fun getTimeSinceLastFeed(): String {
+            if (lastFeedTimeISO == null) return "—"
+            
+            return try {
+                val feedTime = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply {
+                    timeZone = java.util.TimeZone.getTimeZone("UTC")
+                }.parse(lastFeedTimeISO)
+                
+                if (feedTime == null) return "—"
+                
+                val now = Date()
+                val diffMs = now.time - feedTime.time
+                val diffMinutes = (diffMs / 60000).toInt()
+                
+                val hours = diffMinutes / 60
+                val minutes = diffMinutes % 60
+                
+                when {
+                    hours > 0 -> "${hours}h ${minutes}m"
+                    minutes > 0 -> "${minutes}m"
+                    else -> "Just now"
+                }
+            } catch (e: Exception) {
+                "—"
+            }
+        }
+    }
     
     companion object {
         fun getCurrentTimestamp(): String {
-            return SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date())
+            return SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).format(Date())
         }
     }
 }

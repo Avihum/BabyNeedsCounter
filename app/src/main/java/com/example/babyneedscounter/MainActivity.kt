@@ -7,13 +7,21 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import android.content.Intent
 import android.net.Uri
+import android.appwidget.AppWidgetManager
+import android.content.ComponentName
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -24,6 +32,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
@@ -43,6 +53,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -50,13 +61,18 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import kotlinx.coroutines.launch
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.res.vectorResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -84,6 +100,52 @@ class MainActivity : ComponentActivity() {
             BabyNeedsCounterTheme {
                 AppNavigation()
             }
+        }
+    }
+    
+    override fun onResume() {
+        super.onResume()
+        // Update widgets when app comes to foreground
+        updateAllWidgets()
+    }
+    
+    override fun onPause() {
+        super.onPause()
+        // Update widgets when app goes to background
+        updateAllWidgets()
+    }
+    
+    private fun updateAllWidgets() {
+        try {
+            val appWidgetManager = AppWidgetManager.getInstance(this)
+            
+            // Update stats widget
+            val statsWidgetIds = appWidgetManager.getAppWidgetIds(
+                ComponentName(this, BabyStatsWidget::class.java)
+            )
+            if (statsWidgetIds.isNotEmpty()) {
+                val statsIntent = Intent(this, BabyStatsWidget::class.java).apply {
+                    action = AppWidgetManager.ACTION_APPWIDGET_UPDATE
+                    putExtra(AppWidgetManager.EXTRA_APPWIDGET_IDS, statsWidgetIds)
+                }
+                sendBroadcast(statsIntent)
+                Log.d("MainActivity", "Triggered stats widget update for ${statsWidgetIds.size} widget(s)")
+            }
+            
+            // Update logging widget
+            val loggingWidgetIds = appWidgetManager.getAppWidgetIds(
+                ComponentName(this, BabyLoggingWidget::class.java)
+            )
+            if (loggingWidgetIds.isNotEmpty()) {
+                val loggingIntent = Intent(this, BabyLoggingWidget::class.java).apply {
+                    action = AppWidgetManager.ACTION_APPWIDGET_UPDATE
+                    putExtra(AppWidgetManager.EXTRA_APPWIDGET_IDS, loggingWidgetIds)
+                }
+                sendBroadcast(loggingIntent)
+                Log.d("MainActivity", "Triggered logging widget update for ${loggingWidgetIds.size} widget(s)")
+            }
+        } catch (e: Exception) {
+            Log.e("MainActivity", "Error updating widgets", e)
         }
     }
 }
@@ -136,6 +198,7 @@ fun HomeScreen(onSettingsClick: () -> Unit) {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BabyNeedsLogger(
     modifier: Modifier = Modifier,
@@ -152,6 +215,11 @@ fun BabyNeedsLogger(
     var todayStats by remember { mutableStateOf<BackendService.TodayStats?>(null) }
     var lastRefresh by remember { mutableStateOf(0L) }
     var selectedEvents by remember { mutableStateOf(setOf<String>()) }
+    var notes by remember { mutableStateOf("") }
+    var useCustomTime by remember { mutableStateOf(false) }
+    val calendar = remember { java.util.Calendar.getInstance() }
+    var customHour by remember { mutableStateOf(calendar.get(java.util.Calendar.HOUR_OF_DAY)) }
+    var customMinute by remember { mutableStateOf(calendar.get(java.util.Calendar.MINUTE)) }
     
     // Function to refresh stats
     val refreshStats: () -> Unit = {
@@ -169,13 +237,74 @@ fun BabyNeedsLogger(
         refreshStats()
     }
     
-    val logEvent: (String, String) -> Unit = logEvent@{ eventType, eventName ->
+    // Refresh stats when screen becomes visible (lifecycle aware)
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                Log.d("BabyNeeds", "Screen resumed - refreshing stats")
+                refreshStats()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
+    
+    // Periodic refresh every 15 seconds while app is active (tighter tracking)
+    LaunchedEffect(Unit) {
+        while (true) {
+            kotlinx.coroutines.delay(15_000L) // 15 seconds (reduced from 30)
+            if (googleSheetUrl.isNotEmpty() && !isLoading) {
+                Log.d("BabyNeeds", "Periodic stats refresh triggered")
+                refreshStats()
+            }
+        }
+    }
+    
+    // Helper function to update all widgets
+    val updateAllWidgets: () -> Unit = {
+        try {
+            val appWidgetManager = AppWidgetManager.getInstance(context)
+            
+            // Update stats widget
+            val statsWidgetIds = appWidgetManager.getAppWidgetIds(
+                ComponentName(context, BabyStatsWidget::class.java)
+            )
+            if (statsWidgetIds.isNotEmpty()) {
+                val statsIntent = Intent(context, BabyStatsWidget::class.java).apply {
+                    action = AppWidgetManager.ACTION_APPWIDGET_UPDATE
+                    putExtra(AppWidgetManager.EXTRA_APPWIDGET_IDS, statsWidgetIds)
+                }
+                context.sendBroadcast(statsIntent)
+                Log.d("BabyNeeds", "Triggered stats widget update for ${statsWidgetIds.size} widget(s)")
+            }
+            
+            // Update logging widget (if needed)
+            val loggingWidgetIds = appWidgetManager.getAppWidgetIds(
+                ComponentName(context, BabyLoggingWidget::class.java)
+            )
+            if (loggingWidgetIds.isNotEmpty()) {
+                val loggingIntent = Intent(context, BabyLoggingWidget::class.java).apply {
+                    action = AppWidgetManager.ACTION_APPWIDGET_UPDATE
+                    putExtra(AppWidgetManager.EXTRA_APPWIDGET_IDS, loggingWidgetIds)
+                }
+                context.sendBroadcast(loggingIntent)
+                Log.d("BabyNeeds", "Triggered logging widget update for ${loggingWidgetIds.size} widget(s)")
+            }
+        } catch (e: Exception) {
+            Log.e("BabyNeeds", "Error updating widgets", e)
+        }
+    }
+    
+    val logEvent: (String, String, String) -> Unit = logEvent@{ eventType, eventName, eventNotes ->
         if (isLoading) return@logEvent
         
         scope.launch {
             try {
                 isLoading = true
-                Log.d("BabyNeeds", "Logging event: $eventType")
+                Log.d("BabyNeeds", "Logging event: $eventType with notes: $eventNotes")
                 Log.d("BabyNeeds", "Google Sheet URL: $googleSheetUrl")
                 
                 if (googleSheetUrl.isEmpty()) {
@@ -185,11 +314,32 @@ fun BabyNeedsLogger(
                     return@launch
                 }
                 
+                // Log current state for debugging
+                Log.d("BabyNeeds", "useCustomTime: $useCustomTime")
+                Log.d("BabyNeeds", "customHour: $customHour, customMinute: $customMinute")
+                
+                // Use custom time if enabled, otherwise use current time
+                val timestamp = if (useCustomTime) {
+                    val customCal = java.util.Calendar.getInstance()
+                    customCal.set(java.util.Calendar.HOUR_OF_DAY, customHour)
+                    customCal.set(java.util.Calendar.MINUTE, customMinute)
+                    customCal.set(java.util.Calendar.SECOND, 0)
+                    val formatted = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).format(customCal.time)
+                    Log.d("BabyNeeds", "Generated custom timestamp: $formatted (from $customHour:$customMinute)")
+                    formatted
+                } else {
+                    val current = BackendService.getCurrentTimestamp()
+                    Log.d("BabyNeeds", "Using current timestamp: $current")
+                    current
+                }
+                
                 val event = BackendService.BabyEvent(
-                    timestamp = BackendService.getCurrentTimestamp(),
+                    timestamp = timestamp,
                     type = eventType,
-                    notes = ""
+                    notes = eventNotes
                 )
+                
+                Log.d("BabyNeeds", "Final event timestamp: $timestamp (useCustomTime was: $useCustomTime)")
                 
                 snackbarHostState.showSnackbar("Saving $eventName...")
                 val success = backendService.logEvent(googleSheetUrl, event)
@@ -197,8 +347,22 @@ fun BabyNeedsLogger(
                 if (success) {
                     Log.d("BabyNeeds", "Successfully synced to Google Sheets")
                     snackbarHostState.showSnackbar("✓ $eventName tracked!")
+                    
+                    // Clear form after successful logging
+                    selectedEvents = setOf()
+                    notes = ""
+                    
+                    // Reset custom time after successful logging
+                    useCustomTime = false
+                    val now = java.util.Calendar.getInstance()
+                    customHour = now.get(java.util.Calendar.HOUR_OF_DAY)
+                    customMinute = now.get(java.util.Calendar.MINUTE)
+                    
                     // Refresh stats after successful log
                     refreshStats()
+                    
+                    // Update widgets immediately
+                    updateAllWidgets()
                 } else {
                     Log.e("BabyNeeds", "Failed to sync to Google Sheets")
                     snackbarHostState.showSnackbar("❌ Couldn't save. Check your connection.")
@@ -216,6 +380,7 @@ fun BabyNeedsLogger(
         modifier = modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
+            .verticalScroll(rememberScrollState())
             .padding(horizontal = 20.dp, vertical = 16.dp),
         verticalArrangement = Arrangement.Top,
         horizontalAlignment = Alignment.CenterHorizontally
@@ -248,8 +413,22 @@ fun BabyNeedsLogger(
             if (googleSheetViewUrl.isNotEmpty()) {
                 IconButton(
                     onClick = {
-                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(googleSheetViewUrl))
-                        context.startActivity(intent)
+                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(googleSheetViewUrl)).apply {
+                            // Add flags to open in browser and avoid account chooser
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                            // Try to force open in Chrome/browser instead of account selector
+                            setPackage("com.android.chrome")
+                        }
+                        try {
+                            context.startActivity(intent)
+                        } catch (e: Exception) {
+                            // If Chrome not available, fallback to default browser
+                            val fallbackIntent = Intent(Intent.ACTION_VIEW, Uri.parse(googleSheetViewUrl)).apply {
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            }
+                            context.startActivity(fallbackIntent)
+                        }
                     }
                 ) {
                     Icon(
@@ -264,36 +443,18 @@ fun BabyNeedsLogger(
         
         Spacer(modifier = Modifier.height(16.dp))
         
-        // Quick Stats Row
+        // Quick Stats Row - 3 Trackers
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceEvenly
+            horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            val todayCount = todayStats?.totalEvents ?: 0
-            val lastTime = todayStats?.lastEventTime?.let { timestamp ->
-                // Parse and format the timestamp
-                try {
-                    Log.d("BabyNeeds", "Parsing timestamp: $timestamp")
-                    // Handle both string and Date formats
-                    val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
-                    val date = sdf.parse(timestamp.toString())
-                    val now = Date()
-                    val diffMinutes = ((now.time - (date?.time ?: 0)) / 60000).toInt()
-                    when {
-                        diffMinutes < 1 -> "Just now"
-                        diffMinutes < 60 -> "${diffMinutes}m ago"
-                        diffMinutes < 1440 -> "${diffMinutes / 60}h ago"
-                        else -> "${diffMinutes / 1440}d ago"
-                    }
-                } catch (e: Exception) {
-                    Log.e("BabyNeeds", "Error parsing timestamp: $timestamp", e)
-                    "—"
-                }
-            } ?: "—"
+            val peeCount = todayStats?.peeCount ?: 0
+            val poopCount = todayStats?.poopCount ?: 0
+            val feedTime = todayStats?.getTimeSinceLastFeed() ?: "—"
             
-            Log.d("BabyNeeds", "Today count: $todayCount, Last time: $lastTime")
-            QuickStatCard("Today", "$todayCount", "Events")
-            QuickStatCard("Last", "—", lastTime)
+            QuickStatCard("💧 Pee", "$peeCount", "times")
+            QuickStatCard("💩 Poop", "$poopCount", "times")
+            QuickStatCard("🐄 Feed", feedTime, "ago")
         }
         
         Spacer(modifier = Modifier.height(16.dp))
@@ -352,6 +513,87 @@ fun BabyNeedsLogger(
             )
         }
         
+        // Notes input - always visible
+        Spacer(modifier = Modifier.height(12.dp))
+        androidx.compose.material3.OutlinedTextField(
+            value = notes,
+            onValueChange = { notes = it },
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("Notes (optional)") },
+            placeholder = { Text("e.g., yellow, runny, fussy") },
+            singleLine = true,
+            enabled = !isLoading,
+            shape = RoundedCornerShape(12.dp)
+        )
+        
+        // Custom Time Section
+        Spacer(modifier = Modifier.height(12.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                text = "Log from different time",
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onBackground
+            )
+            androidx.compose.material3.Switch(
+                checked = useCustomTime,
+                onCheckedChange = { useCustomTime = it },
+                enabled = !isLoading
+            )
+        }
+        
+        // Time Picker - shown when custom time is enabled
+        if (useCustomTime) {
+            Spacer(modifier = Modifier.height(8.dp))
+            
+            // Vertical scroll wheel time picker
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(120.dp),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // Hour picker
+                NumberPicker(
+                    value = customHour,
+                    range = 0..23,
+                    onValueChange = { customHour = it },
+                    modifier = Modifier.weight(1f)
+                )
+                
+                Text(
+                    text = ":",
+                    style = MaterialTheme.typography.headlineLarge,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(horizontal = 8.dp)
+                )
+                
+                // Minute picker
+                NumberPicker(
+                    value = customMinute,
+                    range = 0..59,
+                    onValueChange = { customMinute = it },
+                    modifier = Modifier.weight(1f)
+                )
+            }
+            
+            // Reset to current time button
+            androidx.compose.material3.TextButton(
+                onClick = {
+                    val now = java.util.Calendar.getInstance()
+                    customHour = now.get(java.util.Calendar.HOUR_OF_DAY)
+                    customMinute = now.get(java.util.Calendar.MINUTE)
+                },
+                enabled = !isLoading
+            ) {
+                Text("Reset to now", fontSize = 12.sp)
+            }
+        }
+        
         // Log Button - compact
         if (selectedEvents.isNotEmpty()) {
             Spacer(modifier = Modifier.height(12.dp))
@@ -374,8 +616,8 @@ fun BabyNeedsLogger(
                             else -> type
                         }
                     }
-                    logEvent(emojiType, displayName)
-                    selectedEvents = setOf()
+                    logEvent(emojiType, displayName, notes)
+                    // Note: Reset logic moved inside logEvent to avoid race condition
                 },
                 modifier = Modifier
                     .fillMaxWidth()
@@ -513,11 +755,12 @@ fun SelectableActionCard(
 }
 
 @Composable
-fun QuickStatCard(label: String, value: String, subtitle: String) {
+fun RowScope.QuickStatCard(label: String, value: String, subtitle: String) {
     Card(
         modifier = Modifier
-            .width(160.dp)
-            .height(100.dp),
+            .weight(1f)
+            .height(100.dp)
+            .padding(horizontal = 4.dp),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceVariant
@@ -527,7 +770,7 @@ fun QuickStatCard(label: String, value: String, subtitle: String) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(12.dp),
+                .padding(8.dp),
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
@@ -536,22 +779,130 @@ fun QuickStatCard(label: String, value: String, subtitle: String) {
                 style = MaterialTheme.typography.labelLarge,
                 fontWeight = FontWeight.SemiBold,
                 color = TextSecondary,
-                fontSize = 13.sp
+                fontSize = 11.sp,
+                textAlign = TextAlign.Center
             )
-            Spacer(modifier = Modifier.height(4.dp))
+            Spacer(modifier = Modifier.height(2.dp))
             Text(
                 text = value,
                 style = MaterialTheme.typography.headlineLarge,
                 fontWeight = FontWeight.Bold,
-                fontSize = 32.sp,
-                color = MaterialTheme.colorScheme.onSurface
+                fontSize = 24.sp,
+                color = MaterialTheme.colorScheme.onSurface,
+                textAlign = TextAlign.Center
             )
             Text(
                 text = subtitle,
                 style = MaterialTheme.typography.bodyMedium,
                 color = TextSecondary,
-                fontSize = 12.sp
+                fontSize = 10.sp,
+                textAlign = TextAlign.Center
             )
+        }
+    }
+}
+
+@Composable
+fun NumberPicker(
+    value: Int,
+    range: IntRange,
+    onValueChange: (Int) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val itemHeight = 40.dp
+    val itemHeightPx = with(LocalDensity.current) { itemHeight.toPx() }
+    
+    // Create a scrollable state
+    val listState = rememberLazyListState()
+    val coroutineScope = rememberCoroutineScope()
+    
+    // Scroll to initial value centered on screen (only once on mount)
+    LaunchedEffect(Unit) {
+        val targetIndex = value - range.first // No +1 needed with contentPadding approach
+        listState.scrollToItem(targetIndex)
+    }
+    
+    // Track if we're currently scrolling
+    var wasScrolling by remember { mutableStateOf(false) }
+    
+    // Only update value when scroll actually stops
+    LaunchedEffect(listState.isScrollInProgress) {
+        if (wasScrolling && !listState.isScrollInProgress) {
+            // Scrolling just stopped - determine centered item
+            val layoutInfo = listState.layoutInfo
+            if (layoutInfo.visibleItemsInfo.isNotEmpty()) {
+                val centerY = layoutInfo.viewportEndOffset / 2
+                
+                val centerItem = layoutInfo.visibleItemsInfo.minByOrNull { item ->
+                    kotlin.math.abs((item.offset + item.size / 2) - centerY)
+                }
+                
+                centerItem?.let { item ->
+                    // Calculate the number (no padding adjustment needed with contentPadding)
+                    val numberIndex = item.index
+                    if (numberIndex >= 0 && numberIndex < range.count()) {
+                        val newValue = range.first + numberIndex
+                        if (newValue != value) {
+                            onValueChange(newValue)
+                        }
+                        // Snap to center
+                        listState.animateScrollToItem(item.index)
+                    }
+                }
+            }
+        }
+        wasScrolling = listState.isScrollInProgress
+    }
+    
+    Box(
+        modifier = modifier
+            .height(120.dp)
+            .fillMaxWidth(),
+        contentAlignment = Alignment.Center
+    ) {
+        // Selection indicator
+        Box(
+            modifier = Modifier
+                .fillMaxWidth(0.8f)
+                .height(itemHeight)
+                .background(
+                    MaterialTheme.colorScheme.primary.copy(alpha = 0.15f),
+                    RoundedCornerShape(8.dp)
+                )
+        )
+        
+        // Scrollable list with content padding to center items
+        LazyColumn(
+            state = listState,
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.fillMaxSize(),
+            userScrollEnabled = true,
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 40.dp)
+        ) {
+            // Numbers (no manual padding needed)
+            items(range.count()) { index ->
+                val number = range.first + index
+                val isSelected = number == value
+                
+                Box(
+                    modifier = Modifier
+                        .height(itemHeight)
+                        .fillMaxWidth(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = String.format("%02d", number),
+                        style = MaterialTheme.typography.headlineMedium,
+                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                        color = if (isSelected) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
+                        },
+                        fontSize = if (isSelected) 32.sp else 24.sp
+                    )
+                }
+            }
         }
     }
 }

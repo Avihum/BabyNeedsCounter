@@ -6,37 +6,134 @@
     android:padding="8dp"
     android:background="@drawable/widget_background">
 
-    <!-- Status/Feedback Area -->
+    <!-- Stats Dashboard -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="0dp"
-        android:layout_weight="0.8"
-        android:orientation="vertical"
-        android:gravity="center"
-        android:padding="6dp">
+        android:layout_weight="1.2"
+        android:orientation="horizontal"
+        android:padding="4dp">
 
-        <TextView
-            android:id="@+id/widget_status_text"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="Ready to track"
-            android:textColor="#EEEEEE"
-            android:textSize="14sp"
-            android:fontFamily="sans-serif-medium"
+        <!-- Pee Count -->
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:orientation="vertical"
             android:gravity="center"
-            android:alpha="0.8" />
+            android:background="@drawable/widget_stat_card"
+            android:layout_marginEnd="2dp"
+            android:padding="4dp">
 
-        <TextView
-            android:id="@+id/widget_last_event"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="✓"
-            android:textColor="#4CAF50"
-            android:textSize="20sp"
-            android:fontFamily="sans-serif-medium"
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="💧"
+                android:textSize="20sp"
+                android:gravity="center" />
+
+            <TextView
+                android:id="@+id/widget_pee_count"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="0"
+                android:textColor="#EEEEEE"
+                android:textSize="22sp"
+                android:fontFamily="sans-serif-medium"
+                android:textStyle="bold"
+                android:gravity="center"
+                android:layout_marginTop="2dp" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Pee"
+                android:textColor="#AAAAAA"
+                android:textSize="9sp"
+                android:fontFamily="sans-serif"
+                android:gravity="center" />
+        </LinearLayout>
+
+        <!-- Poop Count -->
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:orientation="vertical"
             android:gravity="center"
-            android:visibility="gone"
-            android:layout_marginTop="4dp" />
+            android:background="@drawable/widget_stat_card"
+            android:layout_marginStart="2dp"
+            android:layout_marginEnd="2dp"
+            android:padding="4dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="💩"
+                android:textSize="20sp"
+                android:gravity="center" />
+
+            <TextView
+                android:id="@+id/widget_poop_count"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="0"
+                android:textColor="#EEEEEE"
+                android:textSize="22sp"
+                android:fontFamily="sans-serif-medium"
+                android:textStyle="bold"
+                android:gravity="center"
+                android:layout_marginTop="2dp" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Poop"
+                android:textColor="#AAAAAA"
+                android:textSize="9sp"
+                android:fontFamily="sans-serif"
+                android:gravity="center" />
+        </LinearLayout>
+
+        <!-- Time Since Last Feed -->
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:orientation="vertical"
+            android:gravity="center"
+            android:background="@drawable/widget_stat_card"
+            android:layout_marginStart="2dp"
+            android:padding="4dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="🐄"
+                android:textSize="20sp"
+                android:gravity="center" />
+
+            <TextView
+                android:id="@+id/widget_feed_time"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="—"
+                android:textColor="#EEEEEE"
+                android:textSize="16sp"
+                android:fontFamily="sans-serif-medium"
+                android:textStyle="bold"
+                android:gravity="center"
+                android:layout_marginTop="2dp" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Last feed"
+                android:textColor="#AAAAAA"
+                android:textSize="9sp"
+                android:fontFamily="sans-serif"
+                android:gravity="center" />
+        </LinearLayout>
     </LinearLayout>
 
     <!-- Top Row Buttons -->

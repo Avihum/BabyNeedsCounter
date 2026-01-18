@@ -25,16 +25,28 @@
             </intent-filter>
         </activity>
 
-        <!-- Widget Provider -->
+        <!-- Stats Widget - View today's counts -->
         <receiver
-            android:name=".BabyNeedsWidget"
+            android:name=".BabyStatsWidget"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
             </intent-filter>
             <meta-data
                 android:name="android.appwidget.provider"
-                android:resource="@xml/widget_info" />
+                android:resource="@xml/widget_stats_info" />
+        </receiver>
+
+        <!-- Logging Widget - Quick action buttons -->
+        <receiver
+            android:name=".BabyLoggingWidget"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_logging_info" />
         </receiver>
     </application>
 
