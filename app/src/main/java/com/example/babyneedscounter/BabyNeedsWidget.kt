@@ -5,8 +5,19 @@ import android.appwidget.AppWidgetManager
 import android.appwidget.AppWidgetProvider
 import android.content.Context
 import android.content.Intent
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
+import android.view.View
 import android.widget.RemoteViews
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class BabyNeedsWidget : AppWidgetProvider() {
 
@@ -34,18 +45,108 @@ class BabyNeedsWidget : AppWidgetProvider() {
     override fun onReceive(context: Context, intent: Intent) {
         super.onReceive(context, intent)
         
-        when (intent.action) {
+        val eventInfo = when (intent.action) {
             ACTION_POOP_PEE -> {
                 Log.d("BabyNeeds", "Widget: Logged Poop & Pee")
-                // TODO: Save to database when data layer is implemented
+                Pair("poop_pee", "💩 Poop & Pee")
             }
             ACTION_PEE -> {
                 Log.d("BabyNeeds", "Widget: Logged Pee Only")
-                // TODO: Save to database when data layer is implemented
+                Pair("pee", "💧 Pee")
             }
             ACTION_FEED -> {
                 Log.d("BabyNeeds", "Widget: Logged Feed (Breastmilk)")
-                // TODO: Save to database when data layer is implemented
+                Pair("feed", "🐄 Feed")
+            }
+            else -> null
+        }
+        
+        // Show feedback and sync to backend if an event was triggered
+        eventInfo?.let { (eventType, displayName) ->
+            showFeedback(context, displayName, true)
+            syncToBackend(context, eventType, displayName)
+        }
+    }
+    
+    private fun showFeedback(context: Context, message: String, isLoading: Boolean) {
+        val appWidgetManager = AppWidgetManager.getInstance(context)
+        val widgetIds = appWidgetManager.getAppWidgetIds(
+            android.content.ComponentName(context, BabyNeedsWidget::class.java)
+        )
+        
+        for (widgetId in widgetIds) {
+            val views = RemoteViews(context.packageName, R.layout.widget_baby_needs)
+            
+            if (isLoading) {
+                views.setTextViewText(R.id.widget_status_text, "Syncing...")
+                views.setViewVisibility(R.id.widget_last_event, View.GONE)
+            } else {
+                val timeFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
+                views.setTextViewText(R.id.widget_status_text, message)
+                views.setTextViewText(R.id.widget_last_event, "✓ ${timeFormat.format(Date())}")
+                views.setViewVisibility(R.id.widget_last_event, View.VISIBLE)
+            }
+            
+            // Re-attach click listeners
+            views.setOnClickPendingIntent(
+                R.id.widget_btn_poop_pee,
+                getPendingSelfIntent(context, ACTION_POOP_PEE)
+            )
+            views.setOnClickPendingIntent(
+                R.id.widget_btn_pee,
+                getPendingSelfIntent(context, ACTION_PEE)
+            )
+            views.setOnClickPendingIntent(
+                R.id.widget_btn_feed,
+                getPendingSelfIntent(context, ACTION_FEED)
+            )
+            
+            appWidgetManager.updateAppWidget(widgetId, views)
+        }
+    }
+    
+    private fun syncToBackend(context: Context, eventType: String, displayName: String) {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        scope.launch {
+            try {
+                val settingsManager = SettingsManager(context)
+                val googleSheetUrl = settingsManager.googleSheetUrl.first()
+                
+                if (googleSheetUrl.isNotEmpty()) {
+                    val backendService = BackendService(context)
+                    val event = BackendService.BabyEvent(
+                        timestamp = BackendService.getCurrentTimestamp(),
+                        type = eventType,
+                        notes = ""
+                    )
+                    val success = backendService.logEvent(googleSheetUrl, event)
+                    
+                    // Update UI with result on main thread
+                    Handler(Looper.getMainLooper()).post {
+                        if (success) {
+                            Log.d("BabyNeeds", "Widget: Successfully synced to Google Sheets")
+                            showFeedback(context, "$displayName logged", false)
+                        } else {
+                            Log.e("BabyNeeds", "Widget: Failed to sync to Google Sheets")
+                            showFeedback(context, "Failed to sync", false)
+                        }
+                        
+                        // Reset to default after 3 seconds
+                        Handler(Looper.getMainLooper()).postDelayed({
+                            showFeedback(context, "Tap a button to log", false)
+                        }, 3000)
+                    }
+                } else {
+                    Log.w("BabyNeeds", "Widget: No Google Sheet URL configured")
+                    Handler(Looper.getMainLooper()).post {
+                        showFeedback(context, "Configure URL in app", false)
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e("BabyNeeds", "Widget: Error syncing to backend", e)
+                Handler(Looper.getMainLooper()).post {
+                    showFeedback(context, "Error syncing", false)
+                }
             }
         }
     }

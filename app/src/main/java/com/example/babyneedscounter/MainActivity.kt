@@ -19,16 +19,32 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.platform.LocalContext
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -39,6 +55,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.rememberNavController
 import com.example.babyneedscounter.ui.theme.BabyNeedsCounterTheme
 import com.example.babyneedscounter.ui.theme.BabyBlue
 import com.example.babyneedscounter.ui.theme.MintGreen
@@ -52,16 +71,114 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             BabyNeedsCounterTheme {
-                Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    BabyNeedsLogger(modifier = Modifier.padding(innerPadding))
-                }
+                AppNavigation()
             }
         }
     }
 }
 
 @Composable
-fun BabyNeedsLogger(modifier: Modifier = Modifier) {
+fun AppNavigation() {
+    val navController = rememberNavController()
+    
+    NavHost(navController = navController, startDestination = "home") {
+        composable("home") {
+            HomeScreen(onSettingsClick = { navController.navigate("settings") })
+        }
+        composable("settings") {
+            SettingsScreen(onBackClick = { navController.popBackStack() })
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun HomeScreen(onSettingsClick: () -> Unit) {
+    val snackbarHostState = remember { SnackbarHostState() }
+    
+    Scaffold(
+        modifier = Modifier.fillMaxSize(),
+        topBar = {
+            TopAppBar(
+                title = { },
+                actions = {
+                    IconButton(onClick = onSettingsClick) {
+                        Icon(
+                            imageVector = Icons.Default.Settings,
+                            contentDescription = "Settings",
+                            tint = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.background,
+                    actionIconContentColor = MaterialTheme.colorScheme.onBackground
+                )
+            )
+        },
+        snackbarHost = { SnackbarHost(snackbarHostState) }
+    ) { innerPadding ->
+        BabyNeedsLogger(
+            modifier = Modifier.padding(innerPadding),
+            snackbarHostState = snackbarHostState
+        )
+    }
+}
+
+@Composable
+fun BabyNeedsLogger(
+    modifier: Modifier = Modifier,
+    snackbarHostState: SnackbarHostState = remember { SnackbarHostState() }
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val settingsManager = remember { SettingsManager(context) }
+    val backendService = remember { BackendService(context) }
+    val googleSheetUrl by settingsManager.googleSheetUrl.collectAsState(initial = "")
+    
+    var isLoading by remember { mutableStateOf(false) }
+    
+    val logEvent: (String, String) -> Unit = logEvent@{ eventType, eventName ->
+        if (isLoading) return@logEvent
+        
+        scope.launch {
+            try {
+                isLoading = true
+                Log.d("BabyNeeds", "Logging event: $eventType")
+                Log.d("BabyNeeds", "Google Sheet URL: $googleSheetUrl")
+                
+                if (googleSheetUrl.isEmpty()) {
+                    snackbarHostState.showSnackbar("⚠️ Please configure Google Sheets URL in Settings")
+                    Log.w("BabyNeeds", "No Google Sheets URL configured")
+                    isLoading = false
+                    return@launch
+                }
+                
+                val event = BackendService.BabyEvent(
+                    timestamp = BackendService.getCurrentTimestamp(),
+                    type = eventType,
+                    notes = ""
+                )
+                
+                snackbarHostState.showSnackbar("Syncing $eventName...")
+                val success = backendService.logEvent(googleSheetUrl, event)
+                
+                if (success) {
+                    Log.d("BabyNeeds", "Successfully synced to Google Sheets")
+                    snackbarHostState.showSnackbar("✓ $eventName logged successfully!")
+                } else {
+                    Log.e("BabyNeeds", "Failed to sync to Google Sheets")
+                    snackbarHostState.showSnackbar("❌ Failed to sync. Check your URL and internet connection.")
+                }
+            } catch (e: Exception) {
+                Log.e("BabyNeeds", "Error logging event", e)
+                snackbarHostState.showSnackbar("❌ Error: ${e.message}")
+            } finally {
+                isLoading = false
+            }
+        }
+    }
+    
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -108,7 +225,8 @@ fun BabyNeedsLogger(modifier: Modifier = Modifier) {
                 subtitle = "Poop & Pee",
                 icon = "💩",
                 color = WarmYellow,
-                onClick = { Log.d("BabyNeeds", "Logged Poop & Pee") }
+                onClick = { logEvent("poop_pee", "Poop & Pee") },
+                enabled = !isLoading
             )
             
             ActionCard(
@@ -116,7 +234,8 @@ fun BabyNeedsLogger(modifier: Modifier = Modifier) {
                 subtitle = "Pee Only",
                 icon = "💧",
                 color = BabyBlue,
-                onClick = { Log.d("BabyNeeds", "Logged Pee Only") }
+                onClick = { logEvent("pee", "Pee Only") },
+                enabled = !isLoading
             )
             
             ActionCard(
@@ -124,7 +243,15 @@ fun BabyNeedsLogger(modifier: Modifier = Modifier) {
                 subtitle = "Breastmilk",
                 icon = "🐄",
                 color = SoftPink,
-                onClick = { Log.d("BabyNeeds", "Logged Feed (Breastmilk)") }
+                onClick = { logEvent("feed", "Feeding") },
+                enabled = !isLoading
+            )
+        }
+        
+        if (isLoading) {
+            Spacer(modifier = Modifier.height(16.dp))
+            CircularProgressIndicator(
+                modifier = Modifier.size(32.dp)
             )
         }
     }
@@ -137,7 +264,8 @@ fun ActionCard(
     subtitle: String,
     icon: String,
     color: Color,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    enabled: Boolean = true
 ) {
     Card(
         onClick = onClick,
@@ -151,7 +279,8 @@ fun ActionCard(
         elevation = CardDefaults.cardElevation(
             defaultElevation = 2.dp,
             pressedElevation = 8.dp
-        )
+        ),
+        enabled = enabled
     ) {
         Row(
             modifier = Modifier

@@ -2,9 +2,47 @@
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:orientation="horizontal"
+    android:orientation="vertical"
     android:padding="8dp"
     android:background="@drawable/widget_background">
+
+    <!-- Status/Feedback Area -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:orientation="vertical"
+        android:gravity="center"
+        android:padding="4dp">
+
+        <TextView
+            android:id="@+id/widget_status_text"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Tap a button to log"
+            android:textColor="#EEEEEE"
+            android:textSize="10sp"
+            android:gravity="center"
+            android:alpha="0.7" />
+
+        <TextView
+            android:id="@+id/widget_last_event"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="✓"
+            android:textColor="#4CAF50"
+            android:textSize="16sp"
+            android:gravity="center"
+            android:visibility="gone"
+            android:layout_marginTop="2dp" />
+    </LinearLayout>
+
+    <!-- Buttons Row -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="2"
+        android:orientation="horizontal">
 
     <!-- Poop & Pee Button -->
     <LinearLayout
@@ -92,6 +130,8 @@
             android:textSize="9sp"
             android:textStyle="bold"
             android:gravity="center" />
+    </LinearLayout>
+
     </LinearLayout>
 
 </LinearLayout>
