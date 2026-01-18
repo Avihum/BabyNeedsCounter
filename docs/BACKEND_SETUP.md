@@ -22,7 +22,7 @@ The app syncs baby activity data (diaper changes, feedings) to a shared Google S
 
 1. In your Google Sheet, go to **Extensions → Apps Script**
 2. Delete any existing code in the editor
-3. Copy the entire contents of `GoogleAppsScript.js` from this repository
+3. Copy the entire contents of `backend/GoogleAppsScript.js` from this repository
 4. Paste it into the Apps Script editor
 5. Click the **Save** icon (💾) and give your project a name (e.g., "Baby Needs Backend")
 
