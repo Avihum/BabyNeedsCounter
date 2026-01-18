@@ -1,0 +1,39 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    
+    <!-- Baby bottle icon -->
+    <group
+        android:translateX="54"
+        android:translateY="54">
+        
+        <!-- Bottle body -->
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M-12,-20 L12,-20 L12,15 C12,20 8,24 0,24 C-8,24 -12,20 -12,15 Z" />
+        
+        <!-- Bottle neck -->
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M-6,-25 L6,-25 L6,-20 L-6,-20 Z" />
+        
+        <!-- Nipple -->
+        <path
+            android:fillColor="#E8A5C4"
+            android:pathData="M-4,-30 L4,-30 L6,-25 L-6,-25 Z" />
+        
+        <!-- Milk level -->
+        <path
+            android:fillColor="#8FB3E0"
+            android:fillAlpha="0.6"
+            android:pathData="M-11,-10 L11,-10 L11,15 C11,19 7,23 0,23 C-7,23 -11,19 -11,15 Z" />
+        
+        <!-- Heart detail -->
+        <path
+            android:fillColor="#FFD166"
+            android:pathData="M0,0 C-2,-3 -5,-3 -5,-0.5 C-5,2 -2,5 0,7 C2,5 5,2 5,-0.5 C5,-3 2,-3 0,0 Z"
+            android:fillAlpha="0.8" />
+    </group>
+</vector>

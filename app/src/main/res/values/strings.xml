@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">BabyNeedsCounter</string>
+    <string name="widget_description">Quick access to track your baby\'s daily activities</string>
+</resources>
