@@ -394,7 +394,7 @@ class BackendService(private val context: Context) {
                 
                 val request = Request.Builder()
                     .url(webAppUrl)
-                    .put(requestBody)
+                    .post(requestBody)
                     .build()
                 
                 val response = client.newCall(request).execute()
@@ -437,7 +437,7 @@ class BackendService(private val context: Context) {
                 
                 val request = Request.Builder()
                     .url(webAppUrl)
-                    .put(requestBody)
+                    .post(requestBody)
                     .build()
                 
                 val response = client.newCall(request).execute()

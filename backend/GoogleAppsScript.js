@@ -14,6 +14,16 @@ function doPost(e) {
     // Parse the incoming JSON data
     const data = JSON.parse(e.postData.contents);
     
+    // Check if this is an update or delete action
+    const action = data.action;
+    
+    if (action === 'update') {
+      return updateEvent(data);
+    } else if (action === 'delete') {
+      return deleteEvents(data);
+    }
+    
+    // Otherwise, it's a regular event logging
     // Get the active spreadsheet
     const sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
     
@@ -322,31 +332,6 @@ function getStats(sheet, data, e) {
     .setMimeType(ContentService.MimeType.JSON);
 }
 
-function doPut(e) {
-  try {
-    const data = JSON.parse(e.postData.contents);
-    const action = data.action;
-    
-    if (action === 'update') {
-      return updateEvent(data);
-    } else if (action === 'delete') {
-      return deleteEvents(data);
-    }
-    
-    return ContentService.createTextOutput(JSON.stringify({
-      'status': 'error',
-      'message': 'Unknown action: ' + action
-    }))
-    .setMimeType(ContentService.MimeType.JSON);
-    
-  } catch (error) {
-    return ContentService.createTextOutput(JSON.stringify({
-      'status': 'error',
-      'message': error.toString()
-    }))
-    .setMimeType(ContentService.MimeType.JSON);
-  }
-}
 
 function updateEvent(data) {
   try {
