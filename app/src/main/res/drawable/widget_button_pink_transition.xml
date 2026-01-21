@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<animation-list xmlns:android="http://schemas.android.com/apk/res/android"
+    android:oneshot="true">
+    <!-- 20 frames for ultra-smooth 1-second fade -->
+    <item android:duration="50"><shape android:shape="rectangle"><solid android:color="#6A2A4A" /><corners android:radius="12dp" /><stroke android:width="2dp" android:color="#FF4A9E" /></shape></item>
+    <item android:duration="50"><shape android:shape="rectangle"><solid android:color="#5F2845" /><corners android:radius="12dp" /><stroke android:width="2dp" android:color="#EE468F" /></shape></item>
+    <item android:duration="50"><shape android:shape="rectangle"><solid android:color="#552640" /><corners android:radius="12dp" /><stroke android:width="2dp" android:color="#DD4380" /></shape></item>
+    <item android:duration="50"><shape android:shape="rectangle"><solid android:color="#4B243B" /><corners android:radius="12dp" /><stroke android:width="2dp" android:color="#CC3F71" /></shape></item>
+    <item android:duration="50"><shape android:shape="rectangle"><solid android:color="#412236" /><corners android:radius="12dp" /><stroke android:width="2dp" android:color="#BB3C62" /></shape></item>
+    <item android:duration="50"><shape android:shape="rectangle"><solid android:color="#372031" /><corners android:radius="12dp" /><stroke android:width="2dp" android:color="#AA3853" /></shape></item>
+    <item android:duration="50"><shape android:shape="rectangle"><solid android:color="#2D1E2C" /><corners android:radius="12dp" /><stroke android:width="2dp" android:color="#993544" /></shape></item>
+    <item android:duration="50"><shape android:shape="rectangle"><solid android:color="#291D28" /><corners android:radius="12dp" /><stroke android:width="2dp" android:color="#883135" /></shape></item>
+    <item android:duration="50"><shape android:shape="rectangle"><solid android:color="#261C24" /><corners android:radius="12dp" /><stroke android:width="1dp" android:color="#772E26" /></shape></item>
+    <item android:duration="50"><shape android:shape="rectangle"><solid android:color="#231B21" /><corners android:radius="12dp" /><stroke android:width="1dp" android:color="#662B21" /></shape></item>
+    <item android:duration="50"><shape android:shape="rectangle"><solid android:color="#201A1E" /><corners android:radius="12dp" /><stroke android:width="1dp" android:color="#552828" /></shape></item>
+    <item android:duration="50"><shape android:shape="rectangle"><solid android:color="#1E1A1C" /><corners android:radius="12dp" /><stroke android:width="1dp" android:color="#4A262A" /></shape></item>
+    <item android:duration="50"><shape android:shape="rectangle"><solid android:color="#1C1A1A" /><corners android:radius="12dp" /><stroke android:width="1dp" android:color="#402528" /></shape></item>
+    <item android:duration="50"><shape android:shape="rectangle"><solid android:color="#1B1A1A" /><corners android:radius="12dp" /><stroke android:width="1dp" android:color="#382527" /></shape></item>
+    <item android:duration="50"><shape android:shape="rectangle"><solid android:color="#1A1A1A" /><corners android:radius="12dp" /><stroke android:width="1dp" android:color="#302526" /></shape></item>
+    <item android:duration="50"><shape android:shape="rectangle"><solid android:color="#1A1A1A" /><corners android:radius="12dp" /><stroke android:width="1dp" android:color="#2C2525" /></shape></item>
+    <item android:duration="50"><shape android:shape="rectangle"><solid android:color="#1A1A1A" /><corners android:radius="12dp" /><stroke android:width="1dp" android:color="#292525" /></shape></item>
+    <item android:duration="50"><shape android:shape="rectangle"><solid android:color="#1A1A1A" /><corners android:radius="12dp" /><stroke android:width="1dp" android:color="#272525" /></shape></item>
+    <item android:duration="50"><shape android:shape="rectangle"><solid android:color="#1A1A1A" /><corners android:radius="12dp" /><stroke android:width="1dp" android:color="#262525" /></shape></item>
+    <item android:duration="50"><shape android:shape="rectangle"><solid android:color="#1A1A1A" /><corners android:radius="12dp" /><stroke android:width="1dp" android:color="#252525" /></shape></item>
+</animation-list>

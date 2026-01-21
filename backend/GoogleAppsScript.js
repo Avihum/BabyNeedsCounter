@@ -148,101 +148,294 @@ function doGet(e) {
     const sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
     const data = sheet.getDataRange().getValues();
     
-    // Get startTime parameter (7am-7am baby day)
-    // Baby days run from 7am to 7am (not midnight to midnight)
-    // This makes more sense for tracking baby activities
-    const startTimeParam = e.parameter.startTime;
+    // Check for action parameter to determine which operation to perform
+    const action = e.parameter.action || 'stats';
     
-    Logger.log('StartTime parameter received: ' + startTimeParam);
-    Logger.log('Total rows in sheet: ' + data.length);
-    
-    let todayEvents = [];
-    if (startTimeParam) {
-      // Parse the start time (format: "YYYY-MM-DD HH:mm")
-      const startTime = new Date(startTimeParam);
-      Logger.log('Parsed startTime: ' + startTime);
-      
-      // Filter events from startTime onwards (skip header row)
-      todayEvents = data.slice(1).filter(row => {
-        if (!row[0]) return false;
-        
-        let eventTime;
-        const timestamp = row[0];
-        
-        // Handle both Date objects and string timestamps
-        if (timestamp instanceof Date) {
-          eventTime = timestamp;
-        } else {
-          // Try to parse string timestamp
-          eventTime = new Date(timestamp);
-        }
-        
-        // Include events from startTime onwards
-        const isAfterStart = eventTime >= startTime;
-        return isAfterStart;
-      });
-    } else {
-      // Return all events if no startTime specified (skip header row)
-      todayEvents = data.slice(1);
+    if (action === 'getEvents') {
+      // Return detailed event list with row numbers
+      return getDetailedEvents(sheet, data, e);
+    } else if (action === 'stats') {
+      // Return summary statistics (default behavior)
+      return getStats(sheet, data, e);
     }
     
-    Logger.log('Filtered events count: ' + todayEvents.length);
+    return ContentService.createTextOutput(JSON.stringify({
+      'status': 'error',
+      'message': 'Unknown action: ' + action
+    }))
+    .setMimeType(ContentService.MimeType.JSON);
     
-    // Calculate statistics
-    // Since rows are now in LIFO order (newest first), the first event is the most recent
-    // Types are now emojis for faster visual processing
+  } catch (error) {
+    return ContentService.createTextOutput(JSON.stringify({
+      'status': 'error',
+      'message': error.toString()
+    }))
+    .setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+function getDetailedEvents(sheet, data, e) {
+  const startTimeParam = e.parameter.startTime;
+  
+  Logger.log('GetDetailedEvents - StartTime parameter: ' + startTimeParam);
+  Logger.log('Total rows in sheet: ' + data.length);
+  
+  let events = [];
+  
+  // Start from row 2 (skip header at row 1)
+  for (let i = 1; i < data.length; i++) {
+    const row = data[i];
+    if (!row[0]) continue; // Skip empty rows
     
-    // Count pee events (any event containing 💧)
-    const peeCount = todayEvents.filter(row => {
-      const type = row[1];
-      return type && type.includes('💧');
-    }).length;
+    let eventTime;
+    const timestamp = row[0];
     
-    // Count poop events (any event containing 💩)
-    const poopCount = todayEvents.filter(row => {
-      const type = row[1];
-      return type && type.includes('💩');
-    }).length;
+    // Handle both Date objects and string timestamps
+    if (timestamp instanceof Date) {
+      eventTime = timestamp;
+    } else {
+      eventTime = new Date(timestamp);
+    }
     
-    // Find last feeding event (any event containing 🐄)
-    const feedEvents = todayEvents.filter(row => {
-      const type = row[1];
-      return type && type.includes('🐄');
+    // Validate the date
+    if (isNaN(eventTime.getTime())) continue;
+    
+    // Filter by startTime if provided
+    if (startTimeParam) {
+      const startTime = new Date(startTimeParam);
+      if (eventTime < startTime) continue;
+    }
+    
+    // Add event with row number (i + 1 because sheets are 1-indexed)
+    events.push({
+      rowNumber: i + 1,
+      timestamp: eventTime.toISOString(),
+      type: row[1] || '',
+      notes: row[2] || ''
     });
+  }
+  
+  Logger.log('Returning ' + events.length + ' events');
+  
+  return ContentService.createTextOutput(JSON.stringify({
+    status: 'success',
+    events: events
+  }))
+  .setMimeType(ContentService.MimeType.JSON);
+}
+
+function getStats(sheet, data, e) {
+  // Get startTime parameter (7am-7am baby day)
+  // Baby days run from 7am to 7am (not midnight to midnight)
+  // This makes more sense for tracking baby activities
+  const startTimeParam = e.parameter.startTime;
+  
+  Logger.log('StartTime parameter received: ' + startTimeParam);
+  Logger.log('Total rows in sheet: ' + data.length);
+  
+  let todayEvents = [];
+  if (startTimeParam) {
+    // Parse the start time (format: "YYYY-MM-DD HH:mm")
+    const startTime = new Date(startTimeParam);
+    Logger.log('Parsed startTime: ' + startTime);
     
-    // Return the raw timestamp - let the client calculate time difference
-    let lastFeedTimeISO = null;
-    if (feedEvents.length > 0) {
-      const feedTime = feedEvents[0][0];
-      if (feedTime instanceof Date) {
-        lastFeedTimeISO = feedTime.toISOString();
+    // Filter events from startTime onwards (skip header row)
+    todayEvents = data.slice(1).filter(row => {
+      if (!row[0]) return false;
+      
+      let eventTime;
+      const timestamp = row[0];
+      
+      // Handle both Date objects and string timestamps
+      if (timestamp instanceof Date) {
+        eventTime = timestamp;
       } else {
         // Try to parse string timestamp
-        const parsed = new Date(feedTime);
-        if (!isNaN(parsed.getTime())) {
-          lastFeedTimeISO = parsed.toISOString();
-        }
+        eventTime = new Date(timestamp);
+      }
+      
+      // Include events from startTime onwards
+      const isAfterStart = eventTime >= startTime;
+      return isAfterStart;
+    });
+  } else {
+    // Return all events if no startTime specified (skip header row)
+    todayEvents = data.slice(1);
+  }
+  
+  Logger.log('Filtered events count: ' + todayEvents.length);
+  
+  // Calculate statistics
+  // Since rows are now in LIFO order (newest first), the first event is the most recent
+  // Types are now emojis for faster visual processing
+  
+  // Count pee events (any event containing 💧)
+  const peeCount = todayEvents.filter(row => {
+    const type = row[1];
+    return type && type.includes('💧');
+  }).length;
+  
+  // Count poop events (any event containing 💩)
+  const poopCount = todayEvents.filter(row => {
+    const type = row[1];
+    return type && type.includes('💩');
+  }).length;
+  
+  // Find last feeding event (any event containing 🐄)
+  const feedEvents = todayEvents.filter(row => {
+    const type = row[1];
+    return type && type.includes('🐄');
+  });
+  
+  // Return the raw timestamp - let the client calculate time difference
+  let lastFeedTimeISO = null;
+  if (feedEvents.length > 0) {
+    const feedTime = feedEvents[0][0];
+    if (feedTime instanceof Date) {
+      lastFeedTimeISO = feedTime.toISOString();
+    } else {
+      // Try to parse string timestamp
+      const parsed = new Date(feedTime);
+      if (!isNaN(parsed.getTime())) {
+        lastFeedTimeISO = parsed.toISOString();
+      }
+    }
+  }
+  
+  const stats = {
+    peeCount: peeCount,
+    poopCount: poopCount,
+    lastFeedTimeISO: lastFeedTimeISO,
+    // Debug info
+    debug: {
+      startTime: startTimeParam,
+      totalEvents: todayEvents.length,
+      allEventsCount: data.length - 1,
+      sampleTimestamp: data.length > 1 ? data[1][0].toString() : 'no data',
+      serverTime: new Date().toISOString()
+    }
+  };
+  
+  Logger.log('Returning stats: ' + JSON.stringify(stats));
+  
+  return ContentService.createTextOutput(JSON.stringify(stats))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+function doPut(e) {
+  try {
+    const data = JSON.parse(e.postData.contents);
+    const action = data.action;
+    
+    if (action === 'update') {
+      return updateEvent(data);
+    } else if (action === 'delete') {
+      return deleteEvents(data);
+    }
+    
+    return ContentService.createTextOutput(JSON.stringify({
+      'status': 'error',
+      'message': 'Unknown action: ' + action
+    }))
+    .setMimeType(ContentService.MimeType.JSON);
+    
+  } catch (error) {
+    return ContentService.createTextOutput(JSON.stringify({
+      'status': 'error',
+      'message': error.toString()
+    }))
+    .setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+function updateEvent(data) {
+  try {
+    const sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+    const rowNumber = data.rowNumber;
+    const newTimestamp = data.timestamp;
+    const newType = data.type;
+    const newNotes = data.notes;
+    
+    Logger.log('Updating row ' + rowNumber + ' with timestamp: ' + newTimestamp);
+    
+    // Parse the new timestamp
+    let newEventTime = new Date(newTimestamp);
+    
+    // Manual parsing for "YYYY-MM-DD HH:MM" format if needed
+    if (isNaN(newEventTime.getTime())) {
+      const match = newTimestamp.match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{1,2}):(\d{2})$/);
+      if (match) {
+        newEventTime = new Date(
+          parseInt(match[1]),
+          parseInt(match[2]) - 1,
+          parseInt(match[3]),
+          parseInt(match[4]),
+          parseInt(match[5])
+        );
       }
     }
     
-    const stats = {
-      peeCount: peeCount,
-      poopCount: poopCount,
-      lastFeedTimeISO: lastFeedTimeISO,
-      // Debug info
-      debug: {
-        startTime: startTimeParam,
-        totalEvents: todayEvents.length,
-        allEventsCount: data.length - 1,
-        sampleTimestamp: data.length > 1 ? data[1][0].toString() : 'no data',
-        serverTime: new Date().toISOString()
-      }
-    };
-    
-    Logger.log('Returning stats: ' + JSON.stringify(stats));
-    
-    return ContentService.createTextOutput(JSON.stringify(stats))
+    if (isNaN(newEventTime.getTime())) {
+      return ContentService.createTextOutput(JSON.stringify({
+        'status': 'error',
+        'message': 'Invalid timestamp format'
+      }))
       .setMimeType(ContentService.MimeType.JSON);
+    }
+    
+    // Update the row
+    sheet.getRange(rowNumber, 1).setValue(newEventTime);
+    sheet.getRange(rowNumber, 1).setNumberFormat('yyyy-MM-dd HH:mm');
+    sheet.getRange(rowNumber, 2).setValue(newType);
+    sheet.getRange(rowNumber, 3).setValue(newNotes);
+    
+    Logger.log('Successfully updated row ' + rowNumber);
+    
+    return ContentService.createTextOutput(JSON.stringify({
+      'status': 'success',
+      'message': 'Event updated successfully'
+    }))
+    .setMimeType(ContentService.MimeType.JSON);
+    
+  } catch (error) {
+    return ContentService.createTextOutput(JSON.stringify({
+      'status': 'error',
+      'message': error.toString()
+    }))
+    .setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+function deleteEvents(data) {
+  try {
+    const sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+    const rowNumbers = data.rowNumbers; // Array of row numbers to delete
+    
+    if (!rowNumbers || rowNumbers.length === 0) {
+      return ContentService.createTextOutput(JSON.stringify({
+        'status': 'error',
+        'message': 'No row numbers provided'
+      }))
+      .setMimeType(ContentService.MimeType.JSON);
+    }
+    
+    // Sort row numbers in descending order to delete from bottom to top
+    // This prevents row number shifting issues
+    const sortedRows = rowNumbers.sort((a, b) => b - a);
+    
+    Logger.log('Deleting rows: ' + sortedRows.join(', '));
+    
+    for (let i = 0; i < sortedRows.length; i++) {
+      const rowNumber = sortedRows[i];
+      sheet.deleteRow(rowNumber);
+      Logger.log('Deleted row ' + rowNumber);
+    }
+    
+    return ContentService.createTextOutput(JSON.stringify({
+      'status': 'success',
+      'message': 'Deleted ' + sortedRows.length + ' event(s) successfully'
+    }))
+    .setMimeType(ContentService.MimeType.JSON);
     
   } catch (error) {
     return ContentService.createTextOutput(JSON.stringify({

@@ -3,4 +3,5 @@
     <string name="widget_description">Quick access to track your baby\'s daily activities</string>
     <string name="widget_logging_description">Quick buttons to log baby events</string>
     <string name="widget_stats_description">View today\'s stats at a glance</string>
+    <string name="widget_feed_times_description">Previous and next feeding times</string>
 </resources>

@@ -4,7 +4,6 @@ import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.activity.enableEdgeToEdge
 import android.content.Intent
 import android.net.Uri
 import android.appwidget.AppWidgetManager
@@ -34,7 +33,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.OpenInNew
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -67,9 +68,15 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
@@ -95,7 +102,6 @@ import java.util.Locale
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
         setContent {
             BabyNeedsCounterTheme {
                 AppNavigation()
@@ -144,6 +150,19 @@ class MainActivity : ComponentActivity() {
                 sendBroadcast(loggingIntent)
                 Log.d("MainActivity", "Triggered logging widget update for ${loggingWidgetIds.size} widget(s)")
             }
+            
+            // Update feed times widget
+            val feedTimesWidgetIds = appWidgetManager.getAppWidgetIds(
+                ComponentName(this, BabyFeedTimesWidget::class.java)
+            )
+            if (feedTimesWidgetIds.isNotEmpty()) {
+                val feedTimesIntent = Intent(this, BabyFeedTimesWidget::class.java).apply {
+                    action = AppWidgetManager.ACTION_APPWIDGET_UPDATE
+                    putExtra(AppWidgetManager.EXTRA_APPWIDGET_IDS, feedTimesWidgetIds)
+                }
+                sendBroadcast(feedTimesIntent)
+                Log.d("MainActivity", "Triggered feed times widget update for ${feedTimesWidgetIds.size} widget(s)")
+            }
         } catch (e: Exception) {
             Log.e("MainActivity", "Error updating widgets", e)
         }
@@ -156,17 +175,26 @@ fun AppNavigation() {
     
     NavHost(navController = navController, startDestination = "home") {
         composable("home") {
-            HomeScreen(onSettingsClick = { navController.navigate("settings") })
+            HomeScreen(
+                onSettingsClick = { navController.navigate("settings") },
+                onHistoryClick = { navController.navigate("history") }
+            )
         }
         composable("settings") {
             SettingsScreen(onBackClick = { navController.popBackStack() })
+        }
+        composable("history") {
+            HistoryScreen(onBackClick = { navController.popBackStack() })
         }
     }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun HomeScreen(onSettingsClick: () -> Unit) {
+fun HomeScreen(
+    onSettingsClick: () -> Unit,
+    onHistoryClick: () -> Unit
+) {
     val snackbarHostState = remember { SnackbarHostState() }
     
     Scaffold(
@@ -175,6 +203,13 @@ fun HomeScreen(onSettingsClick: () -> Unit) {
             TopAppBar(
                 title = { },
                 actions = {
+                    IconButton(onClick = onHistoryClick) {
+                        Icon(
+                            imageVector = Icons.Default.List,
+                            contentDescription = "History",
+                            tint = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
                     IconButton(onClick = onSettingsClick) {
                         Icon(
                             imageVector = Icons.Default.Settings,
@@ -212,6 +247,7 @@ fun BabyNeedsLogger(
     val googleSheetViewUrl by settingsManager.googleSheetViewUrl.collectAsState(initial = "")
     
     var isLoading by remember { mutableStateOf(false) }
+    var isRefreshing by remember { mutableStateOf(false) }
     var todayStats by remember { mutableStateOf<BackendService.TodayStats?>(null) }
     var lastRefresh by remember { mutableStateOf(0L) }
     var selectedEvents by remember { mutableStateOf(setOf<String>()) }
@@ -225,10 +261,26 @@ fun BabyNeedsLogger(
     val refreshStats: () -> Unit = {
         scope.launch {
             if (googleSheetUrl.isNotEmpty()) {
-                val stats = backendService.fetchTodayStats(googleSheetUrl)
-                todayStats = stats
-                lastRefresh = System.currentTimeMillis()
+                try {
+                    isRefreshing = true
+                    val stats = backendService.fetchTodayStats(googleSheetUrl, useCache = true)
+                    if (stats != null) {
+                        todayStats = stats
+                        lastRefresh = System.currentTimeMillis()
+                    }
+                } finally {
+                    isRefreshing = false
+                }
             }
+        }
+    }
+    
+    // Load cached stats immediately on launch
+    LaunchedEffect(Unit) {
+        val cached = backendService.getCachedStats()
+        if (cached != null) {
+            Log.d("BabyNeeds", "Loaded cached stats on launch")
+            todayStats = cached
         }
     }
     
@@ -293,6 +345,19 @@ fun BabyNeedsLogger(
                 context.sendBroadcast(loggingIntent)
                 Log.d("BabyNeeds", "Triggered logging widget update for ${loggingWidgetIds.size} widget(s)")
             }
+            
+            // Update feed times widget
+            val feedTimesWidgetIds = appWidgetManager.getAppWidgetIds(
+                ComponentName(context, BabyFeedTimesWidget::class.java)
+            )
+            if (feedTimesWidgetIds.isNotEmpty()) {
+                val feedTimesIntent = Intent(context, BabyFeedTimesWidget::class.java).apply {
+                    action = AppWidgetManager.ACTION_APPWIDGET_UPDATE
+                    putExtra(AppWidgetManager.EXTRA_APPWIDGET_IDS, feedTimesWidgetIds)
+                }
+                context.sendBroadcast(feedTimesIntent)
+                Log.d("BabyNeeds", "Triggered feed times widget update for ${feedTimesWidgetIds.size} widget(s)")
+            }
         } catch (e: Exception) {
             Log.e("BabyNeeds", "Error updating widgets", e)
         }
@@ -301,6 +366,9 @@ fun BabyNeedsLogger(
     val logEvent: (String, String, String) -> Unit = logEvent@{ eventType, eventName, eventNotes ->
         if (isLoading) return@logEvent
         
+        // Haptic feedback on button press
+        HapticFeedback.mediumImpact(context)
+        
         scope.launch {
             try {
                 isLoading = true
@@ -308,6 +376,7 @@ fun BabyNeedsLogger(
                 Log.d("BabyNeeds", "Google Sheet URL: $googleSheetUrl")
                 
                 if (googleSheetUrl.isEmpty()) {
+                    HapticFeedback.error(context)
                     snackbarHostState.showSnackbar("⚠️ Please set up your sheet in Settings first")
                     Log.w("BabyNeeds", "No Google Sheets URL configured")
                     isLoading = false
@@ -345,6 +414,9 @@ fun BabyNeedsLogger(
                 val success = backendService.logEvent(googleSheetUrl, event)
                 
                 if (success) {
+                    // Success haptic feedback
+                    HapticFeedback.success(context)
+                    
                     Log.d("BabyNeeds", "Successfully synced to Google Sheets")
                     snackbarHostState.showSnackbar("✓ $eventName tracked!")
                     
@@ -364,10 +436,12 @@ fun BabyNeedsLogger(
                     // Update widgets immediately
                     updateAllWidgets()
                 } else {
+                    HapticFeedback.error(context)
                     Log.e("BabyNeeds", "Failed to sync to Google Sheets")
                     snackbarHostState.showSnackbar("❌ Couldn't save. Check your connection.")
                 }
             } catch (e: Exception) {
+                HapticFeedback.error(context)
                 Log.e("BabyNeeds", "Error logging event", e)
                 snackbarHostState.showSnackbar("❌ Error: ${e.message}")
             } finally {
@@ -393,13 +467,26 @@ fun BabyNeedsLogger(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column {
-                Text(
-                    text = "Baby Needs",
-                    style = MaterialTheme.typography.headlineLarge,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 32.sp,
-                    color = MaterialTheme.colorScheme.onBackground
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Baby Needs",
+                        style = MaterialTheme.typography.headlineLarge,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 32.sp,
+                        color = MaterialTheme.colorScheme.onBackground
+                    )
+                    // Refresh indicator
+                    if (isRefreshing) {
+                        Spacer(modifier = Modifier.width(12.dp))
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(24.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
                 Text(
                     text = "Track your baby's daily activities",
                     style = MaterialTheme.typography.bodyMedium,
@@ -413,21 +500,25 @@ fun BabyNeedsLogger(
             if (googleSheetViewUrl.isNotEmpty()) {
                 IconButton(
                     onClick = {
-                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(googleSheetViewUrl)).apply {
-                            // Add flags to open in browser and avoid account chooser
-                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                            addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
-                            // Try to force open in Chrome/browser instead of account selector
-                            setPackage("com.android.chrome")
-                        }
                         try {
-                            context.startActivity(intent)
-                        } catch (e: Exception) {
-                            // If Chrome not available, fallback to default browser
-                            val fallbackIntent = Intent(Intent.ACTION_VIEW, Uri.parse(googleSheetViewUrl)).apply {
+                            // Try to open in Google Sheets app first
+                            val sheetsAppIntent = Intent(Intent.ACTION_VIEW, Uri.parse(googleSheetViewUrl)).apply {
+                                setPackage("com.google.android.apps.docs.editors.sheets")
                                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                             }
-                            context.startActivity(fallbackIntent)
+                            context.startActivity(sheetsAppIntent)
+                            Log.d("BabyNeeds", "Opened in Google Sheets app")
+                        } catch (e: Exception) {
+                            // If Google Sheets app not available, open in browser
+                            try {
+                                Log.d("BabyNeeds", "Google Sheets app not found, opening in browser")
+                                val browserIntent = Intent(Intent.ACTION_VIEW, Uri.parse(googleSheetViewUrl)).apply {
+                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                }
+                                context.startActivity(browserIntent)
+                            } catch (e2: Exception) {
+                                Log.e("BabyNeeds", "Failed to open Google Sheet", e2)
+                            }
                         }
                     }
                 ) {
@@ -442,6 +533,94 @@ fun BabyNeedsLogger(
         }
         
         Spacer(modifier = Modifier.height(16.dp))
+        
+        // Feed Times Card - Countdown & Next Feed Time
+        val timeUntilNextFeed = todayStats?.getTimeUntilNextFeed() ?: "—"
+        val nextFeedTime = todayStats?.getNextFeedTime() ?: "—"
+        
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 16.dp),
+            shape = RoundedCornerShape(20.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = SoftPink.copy(alpha = 0.12f)
+            ),
+            elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+            border = BorderStroke(2.dp, SoftPink.copy(alpha = 0.3f))
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                horizontalArrangement = Arrangement.SpaceEvenly,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // Next Feed Time
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text(
+                        text = "Next Feed",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = TextSecondary
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "~",
+                            style = MaterialTheme.typography.headlineLarge,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 28.sp,
+                            color = SoftPink.copy(alpha = 0.7f),
+                            modifier = Modifier.padding(end = 4.dp)
+                        )
+                        Text(
+                            text = nextFeedTime,
+                            style = MaterialTheme.typography.headlineLarge,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 32.sp,
+                            color = SoftPink
+                        )
+                    }
+                }
+                
+                // Divider
+                Box(
+                    modifier = Modifier
+                        .width(2.dp)
+                        .height(60.dp)
+                        .background(SoftPink.copy(alpha = 0.3f))
+                )
+                
+                // Next Feed Countdown
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text(
+                        text = "Next Feed In",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = TextSecondary
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = timeUntilNextFeed,
+                        style = MaterialTheme.typography.headlineLarge,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 32.sp,
+                        color = SoftPink
+                    )
+                }
+            }
+        }
         
         // Quick Stats Row - 3 Trackers
         Row(
@@ -594,10 +773,21 @@ fun BabyNeedsLogger(
             }
         }
         
-        // Log Button - compact
+        // Log Button - compact with animation
         if (selectedEvents.isNotEmpty()) {
             Spacer(modifier = Modifier.height(12.dp))
-                Button(
+            
+            // Button scale animation
+            val buttonScale by animateFloatAsState(
+                targetValue = if (isLoading) 0.95f else 1.0f,
+                animationSpec = spring(
+                    dampingRatio = Spring.DampingRatioMediumBouncy,
+                    stiffness = Spring.StiffnessMedium
+                ),
+                label = "button_scale"
+            )
+            
+            Button(
                 onClick = {
                     // Convert to emoji types
                     val emojiType = selectedEvents.joinToString("") { type ->
@@ -621,7 +811,8 @@ fun BabyNeedsLogger(
                 },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(56.dp),
+                    .height(56.dp)
+                    .scale(buttonScale),
                 shape = RoundedCornerShape(16.dp),
                 enabled = !isLoading
             ) {
@@ -661,11 +852,28 @@ fun SelectableActionCard(
     onToggle: () -> Unit,
     enabled: Boolean = true
 ) {
+    val context = LocalContext.current
+    
+    // Animation for selection
+    val scale by animateFloatAsState(
+        targetValue = if (isSelected) 1.0f else 0.98f,
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioMediumBouncy,
+            stiffness = Spring.StiffnessMedium
+        ),
+        label = "card_scale"
+    )
+    
     Card(
-        onClick = onToggle,
+        onClick = {
+            // Haptic feedback on tap
+            HapticFeedback.lightTap(context)
+            onToggle()
+        },
         modifier = Modifier
             .fillMaxWidth()
-            .height(90.dp),
+            .height(90.dp)
+            .scale(scale),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(
             containerColor = if (isSelected) 

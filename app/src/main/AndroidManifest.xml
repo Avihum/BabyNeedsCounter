@@ -3,6 +3,7 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.VIBRATE" />
 
     <application
         android:allowBackup="true"
@@ -47,6 +48,18 @@
             <meta-data
                 android:name="android.appwidget.provider"
                 android:resource="@xml/widget_logging_info" />
+        </receiver>
+
+        <!-- Feed Times Widget - Previous and next feeding times -->
+        <receiver
+            android:name=".BabyFeedTimesWidget"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_feed_times_info" />
         </receiver>
     </application>
 

@@ -15,7 +15,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
-class BabyStatsWidget : AppWidgetProvider() {
+class BabyFeedTimesWidget : AppWidgetProvider() {
 
     override fun onUpdate(
         context: Context,
@@ -28,11 +28,11 @@ class BabyStatsWidget : AppWidgetProvider() {
     }
 
     override fun onEnabled(context: Context) {
-        Log.d("BabyStatsWidget", "Stats widget enabled")
+        Log.d("BabyFeedTimesWidget", "Feed times widget enabled")
     }
 
     override fun onDisabled(context: Context) {
-        Log.d("BabyStatsWidget", "Stats widget disabled")
+        Log.d("BabyFeedTimesWidget", "Feed times widget disabled")
     }
 
     companion object {
@@ -42,7 +42,7 @@ class BabyStatsWidget : AppWidgetProvider() {
             appWidgetId: Int
         ) {
             try {
-                val views = RemoteViews(context.packageName, R.layout.widget_baby_stats)
+                val views = RemoteViews(context.packageName, R.layout.widget_feed_times)
 
                 // Set up tap to open app
                 val intent = Intent(context, MainActivity::class.java)
@@ -52,9 +52,9 @@ class BabyStatsWidget : AppWidgetProvider() {
                     intent,
                     PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
                 )
-                views.setOnClickPendingIntent(R.id.widget_stats_root, pendingIntent)
+                views.setOnClickPendingIntent(R.id.widget_feed_times_root, pendingIntent)
 
-                // Fetch and display today's stats
+                // Fetch and display feed times asynchronously
                 val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
                 scope.launch {
                     try {
@@ -67,11 +67,17 @@ class BabyStatsWidget : AppWidgetProvider() {
                             // 1. First, load cached data immediately for instant display
                             val cachedStats = backendService.getCachedStats()
                             if (cachedStats != null) {
-                                Log.d("BabyStatsWidget", "Displaying cached stats immediately")
+                                Log.d("BabyFeedTimesWidget", "Displaying cached feed times immediately")
                                 Handler(Looper.getMainLooper()).post {
-                                    views.setTextViewText(R.id.widget_stats_pee_count, cachedStats.peeCount.toString())
-                                    views.setTextViewText(R.id.widget_stats_poop_count, cachedStats.poopCount.toString())
-                                    views.setTextViewText(R.id.widget_stats_feed_time, cachedStats.getTimeSinceLastFeed())
+                                    views.setTextViewText(R.id.widget_feed_previous_time, cachedStats.getTimeUntilNextFeed())
+                                    views.setTextViewText(R.id.widget_feed_next_time, cachedStats.getNextFeedTime())
+                                    appWidgetManager.updateAppWidget(appWidgetId, views)
+                                }
+                            } else {
+                                // Set default values if no cache
+                                Handler(Looper.getMainLooper()).post {
+                                    views.setTextViewText(R.id.widget_feed_previous_time, "—")
+                                    views.setTextViewText(R.id.widget_feed_next_time, "—")
                                     appWidgetManager.updateAppWidget(appWidgetId, views)
                                 }
                             }
@@ -80,30 +86,26 @@ class BabyStatsWidget : AppWidgetProvider() {
                             val stats = backendService.fetchTodayStats(googleSheetUrl, useCache = true)
                             
                             if (stats != null) {
-                                Log.d("BabyStatsWidget", "Updating with fresh stats")
+                                Log.d("BabyFeedTimesWidget", "Updating with fresh feed times")
                                 Handler(Looper.getMainLooper()).post {
-                                    views.setTextViewText(R.id.widget_stats_pee_count, stats.peeCount.toString())
-                                    views.setTextViewText(R.id.widget_stats_poop_count, stats.poopCount.toString())
-                                    views.setTextViewText(R.id.widget_stats_feed_time, stats.getTimeSinceLastFeed())
+                                    views.setTextViewText(R.id.widget_feed_previous_time, stats.getTimeUntilNextFeed())
+                                    views.setTextViewText(R.id.widget_feed_next_time, stats.getNextFeedTime())
                                     appWidgetManager.updateAppWidget(appWidgetId, views)
                                 }
                             }
                         } else {
                             Handler(Looper.getMainLooper()).post {
-                                views.setTextViewText(R.id.widget_stats_pee_count, "—")
-                                views.setTextViewText(R.id.widget_stats_poop_count, "—")
-                                views.setTextViewText(R.id.widget_stats_feed_time, "—")
+                                views.setTextViewText(R.id.widget_feed_previous_time, "—")
+                                views.setTextViewText(R.id.widget_feed_next_time, "—")
                                 appWidgetManager.updateAppWidget(appWidgetId, views)
                             }
                         }
                     } catch (e: Exception) {
-                        Log.e("BabyStatsWidget", "Error fetching stats", e)
+                        Log.e("BabyFeedTimesWidget", "Error fetching feed times", e)
                     }
                 }
-
-                appWidgetManager.updateAppWidget(appWidgetId, views)
             } catch (e: Exception) {
-                Log.e("BabyStatsWidget", "Error updating widget", e)
+                Log.e("BabyFeedTimesWidget", "Error updating widget", e)
             }
         }
     }

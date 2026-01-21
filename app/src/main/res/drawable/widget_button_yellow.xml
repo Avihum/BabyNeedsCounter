@@ -1,9 +1,32 @@
 <?xml version="1.0" encoding="utf-8"?>
-<shape xmlns:android="http://schemas.android.com/apk/res/android"
-    android:shape="rectangle">
-    <solid android:color="#1A1A1A" />
-    <corners android:radius="12dp" />
-    <stroke
-        android:width="1dp"
-        android:color="#252525" />
-</shape>
+<animated-selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Pressed state - lighter with yellow tint -->
+    <item
+        android:id="@+id/pressed"
+        android:state_pressed="true">
+        <shape android:shape="rectangle">
+            <solid android:color="#6A5A2A" />
+            <corners android:radius="12dp" />
+            <stroke
+                android:width="2dp"
+                android:color="#FFB84A" />
+        </shape>
+    </item>
+    
+    <!-- Normal state -->
+    <item android:id="@+id/normal">
+        <shape android:shape="rectangle">
+            <solid android:color="#1A1A1A" />
+            <corners android:radius="12dp" />
+            <stroke
+                android:width="1dp"
+                android:color="#252525" />
+        </shape>
+    </item>
+    
+    <!-- Transition from pressed to normal - 1 second fade -->
+    <transition
+        android:fromId="@id/pressed"
+        android:toId="@id/normal"
+        android:drawable="@drawable/widget_button_yellow_transition" />
+</animated-selector>

@@ -9,6 +9,7 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import android.widget.RemoteViews
+import android.widget.Toast
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -40,26 +41,37 @@ class BabyLoggingWidget : AppWidgetProvider() {
         
         val eventInfo = when (intent.action) {
             ACTION_POOP_PEE -> {
+                // Strong haptic feedback with satisfying click pattern
+                HapticFeedback.buttonPress(context)
                 Log.d("BabyNeeds", "Widget: Logged Poop & Pee")
                 Pair("💩💧", "💩💧 Poop & Pee")
             }
             ACTION_PEE -> {
+                // Strong haptic feedback with satisfying click pattern
+                HapticFeedback.buttonPress(context)
                 Log.d("BabyNeeds", "Widget: Logged Pee Only")
                 Pair("💧", "💧 Pee")
             }
             ACTION_FEED -> {
+                // Strong haptic feedback with satisfying click pattern
+                HapticFeedback.buttonPress(context)
                 Log.d("BabyNeeds", "Widget: Logged Feed (Breastmilk)")
                 Pair("🐄", "🐄 Feed")
             }
             ACTION_PEE_FEED -> {
+                // Strong haptic feedback with satisfying click pattern
+                HapticFeedback.buttonPress(context)
                 Log.d("BabyNeeds", "Widget: Logged Pee + Feed")
                 Pair("💧🐄", "💧🐄 Pee + Feed")
             }
             ACTION_POOP_FEED -> {
+                // Strong haptic feedback with satisfying click pattern
+                HapticFeedback.buttonPress(context)
                 Log.d("BabyNeeds", "Widget: Logged Poop + Feed")
                 Pair("💩🐄", "💩🐄 Poop + Feed")
             }
             ACTION_OPEN_APP -> {
+                HapticFeedback.lightTap(context)
                 Log.d("BabyNeeds", "Widget: Opening app")
                 val appIntent = Intent(context, MainActivity::class.java)
                 appIntent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
@@ -70,6 +82,8 @@ class BabyLoggingWidget : AppWidgetProvider() {
         }
         
         eventInfo?.let { (eventType, displayName) ->
+            // Show immediate visual feedback
+            Toast.makeText(context, "📝 Logging $displayName...", Toast.LENGTH_SHORT).show()
             syncToBackend(context, eventType, displayName)
         }
     }
@@ -92,17 +106,29 @@ class BabyLoggingWidget : AppWidgetProvider() {
                     
                     Handler(Looper.getMainLooper()).post {
                         if (success) {
+                            // Success haptic feedback
+                            HapticFeedback.success(context)
+                            Toast.makeText(context, "✓ $displayName tracked!", Toast.LENGTH_SHORT).show()
                             Log.d("BabyNeeds", "Widget: Successfully synced - $displayName")
                             // Update stats widgets
                             updateStatsWidgets(context)
                         } else {
+                            // Error haptic feedback
+                            HapticFeedback.error(context)
+                            Toast.makeText(context, "❌ Failed to save", Toast.LENGTH_SHORT).show()
                             Log.e("BabyNeeds", "Widget: Failed to sync")
                         }
                     }
                 } else {
+                    Handler(Looper.getMainLooper()).post {
+                        HapticFeedback.error(context)
+                    }
                     Log.w("BabyNeeds", "Widget: No Google Sheet URL configured")
                 }
             } catch (e: Exception) {
+                Handler(Looper.getMainLooper()).post {
+                    HapticFeedback.error(context)
+                }
                 Log.e("BabyNeeds", "Widget: Error syncing to backend", e)
             }
         }
@@ -110,11 +136,21 @@ class BabyLoggingWidget : AppWidgetProvider() {
 
     private fun updateStatsWidgets(context: Context) {
         val appWidgetManager = AppWidgetManager.getInstance(context)
+        
+        // Update stats widget
         val statsWidgetIds = appWidgetManager.getAppWidgetIds(
             android.content.ComponentName(context, BabyStatsWidget::class.java)
         )
         for (widgetId in statsWidgetIds) {
             BabyStatsWidget.updateAppWidget(context, appWidgetManager, widgetId)
+        }
+        
+        // Update feed times widget
+        val feedTimesWidgetIds = appWidgetManager.getAppWidgetIds(
+            android.content.ComponentName(context, BabyFeedTimesWidget::class.java)
+        )
+        for (widgetId in feedTimesWidgetIds) {
+            BabyFeedTimesWidget.updateAppWidget(context, appWidgetManager, widgetId)
         }
     }
 
