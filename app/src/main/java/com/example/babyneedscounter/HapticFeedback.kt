@@ -56,6 +56,12 @@ object HapticFeedback {
         try {
             val vibrator = getVibrator(context)
             
+            // Check if vibrator is available and has vibrator capability
+            if (!vibrator.hasVibrator()) {
+                Log.w("HapticFeedback", "Device does not have vibrator")
+                return
+            }
+            
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 // Use VibrationEffect for API 26+
                 val effect = VibrationEffect.createOneShot(
@@ -70,6 +76,8 @@ object HapticFeedback {
             }
             
             Log.d("HapticFeedback", "Performed haptic feedback: ${durationMs}ms")
+        } catch (e: SecurityException) {
+            Log.e("HapticFeedback", "Security exception - VIBRATE permission missing or denied", e)
         } catch (e: Exception) {
             Log.e("HapticFeedback", "Error performing haptic feedback", e)
         }
@@ -81,6 +89,12 @@ object HapticFeedback {
     private fun performPattern(context: Context, pattern: LongArray) {
         try {
             val vibrator = getVibrator(context)
+            
+            // Check if vibrator is available and has vibrator capability
+            if (!vibrator.hasVibrator()) {
+                Log.w("HapticFeedback", "Device does not have vibrator")
+                return
+            }
             
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 // Use VibrationEffect for API 26+
@@ -96,21 +110,26 @@ object HapticFeedback {
             }
             
             Log.d("HapticFeedback", "Performed pattern haptic feedback")
+        } catch (e: SecurityException) {
+            Log.e("HapticFeedback", "Security exception - VIBRATE permission missing or denied", e)
         } catch (e: Exception) {
             Log.e("HapticFeedback", "Error performing pattern haptic feedback", e)
         }
     }
     
     /**
-     * Get the vibrator service
+     * Get the vibrator service - use application context for widgets
      */
     private fun getVibrator(context: Context): Vibrator {
+        // Use application context to ensure we can access system services from widgets
+        val appContext = context.applicationContext ?: context
+        
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            val vibratorManager = context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager
+            val vibratorManager = appContext.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager
             vibratorManager.defaultVibrator
         } else {
             @Suppress("DEPRECATION")
-            context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+            appContext.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
         }
     }
     
