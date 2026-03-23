@@ -36,12 +36,15 @@ import androidx.compose.ui.window.Dialog
 import com.example.babyneedscounter.ui.theme.*
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
+import java.time.ZoneId
 import java.util.*
+
+private enum class InsightsDay { Today, Yesterday }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun HistoryScreen(
-    onBackClick: () -> Unit
+fun InsightsScreen(
+    onNavigateBack: () -> Unit,
 ) {
     val context = LocalContext.current
     val settingsManager = remember { SettingsManager(context) }
@@ -56,12 +59,13 @@ fun HistoryScreen(
     var selectedEventRows by remember { mutableStateOf<Set<Int>>(emptySet()) }
     var isSelectionMode by remember { mutableStateOf(false) }
     var editingEvent by remember { mutableStateOf<BackendService.EventItem?>(null) }
-    
-    // Load events on launch
+    var insightsDay by remember { mutableStateOf(InsightsDay.Today) }
+
+    // Load events on launch (7am–7am baby-day window for Insights + comparisons)
     LaunchedEffect(googleSheetUrl) {
         if (googleSheetUrl.isNotEmpty()) {
             isLoading = true
-            val fetchedEvents = backendService.fetchTodayEvents(googleSheetUrl)
+            val fetchedEvents = backendService.fetchInsightsEvents(googleSheetUrl)
             if (fetchedEvents != null) {
                 events = fetchedEvents
                 Log.d("HistoryScreen", "Loaded ${events.size} events")
@@ -71,12 +75,12 @@ fun HistoryScreen(
             isLoading = false
         }
     }
-    
+
     // Function to refresh events
     val refreshEvents: () -> Unit = {
         scope.launch {
             isLoading = true
-            val fetchedEvents = backendService.fetchTodayEvents(googleSheetUrl)
+            val fetchedEvents = backendService.fetchInsightsEvents(googleSheetUrl)
             if (fetchedEvents != null) {
                 events = fetchedEvents
                 selectedEventRows = emptySet()
@@ -110,23 +114,28 @@ fun HistoryScreen(
             TopAppBar(
                 title = {
                     Text(
-                        text = if (isSelectionMode) "${selectedEventRows.size} selected" else "Today's Events",
+                        text = if (isSelectionMode) "${selectedEventRows.size} selected" else "Insights",
                         fontWeight = FontWeight.Bold
                     )
                 },
                 navigationIcon = {
-                    IconButton(onClick = {
-                        if (isSelectionMode) {
+                    if (isSelectionMode) {
+                        IconButton(onClick = {
                             isSelectionMode = false
                             selectedEventRows = emptySet()
-                        } else {
-                            onBackClick()
+                        }) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = "Clear selection"
+                            )
                         }
-                    }) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Back"
-                        )
+                    } else {
+                        IconButton(onClick = onNavigateBack) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = "Back"
+                            )
+                        }
                     }
                 },
                 actions = {
@@ -154,6 +163,45 @@ fun HistoryScreen(
         },
         snackbarHost = { SnackbarHost(snackbarHostState) }
     ) { innerPadding ->
+        val zone = ZoneId.systemDefault()
+        val nowMs = System.currentTimeMillis()
+        val nowMinute = nowMs / 60_000L
+        val currentBabyDayStart = BabyDay.babyDayStartContaining(nowMs, zone)
+        val anchorBabyDayStart = when (insightsDay) {
+            InsightsDay.Today -> currentBabyDayStart
+            InsightsDay.Yesterday -> BabyDay.previousBabyDayStartMs(currentBabyDayStart, zone)
+        }
+        val compareBabyDayStart = BabyDay.previousBabyDayStartMs(anchorBabyDayStart, zone)
+        val bundle = remember(events, anchorBabyDayStart, insightsDay, nowMinute) {
+            StatsAggregation.insightBundleForBabyDay(
+                events,
+                anchorBabyDayStart,
+                zone,
+                capFeedDiaperLogAtNow = insightsDay == InsightsDay.Today
+            )
+        }
+        val compareBundle = remember(events, compareBabyDayStart) {
+            StatsAggregation.insightBundleForBabyDay(events, compareBabyDayStart, zone, capFeedDiaperLogAtNow = false)
+        }
+        val sleepAgg = bundle.sleep
+        val feedAgg = bundle.feed
+        val diaperAgg = bundle.diaper
+        val displayedEvents = remember(events, anchorBabyDayStart, currentBabyDayStart, nowMinute) {
+            StatsAggregation.eventsForBabyDay(
+                events,
+                anchorBabyDayStart,
+                zone,
+                capAtNow = anchorBabyDayStart == currentBabyDayStart
+            )
+        }
+        val vsLabel = if (insightsDay == InsightsDay.Today) "vs yesterday" else "vs prior day"
+        val sleepDelta = StatsAggregation.formatSleepDeltaMinutes(
+            sleepAgg.totalSleepMinutes,
+            compareBundle.sleep.totalSleepMinutes
+        )
+        val feedDelta = StatsAggregation.formatCountDelta(feedAgg.feedCount, compareBundle.feed.feedCount)
+        val diaperDelta = StatsAggregation.formatCountDelta(diaperAgg.diaperCount, compareBundle.diaper.diaperCount)
+
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -161,7 +209,6 @@ fun HistoryScreen(
                 .padding(innerPadding)
         ) {
             if (isLoading && events.isEmpty()) {
-                // Loading indicator
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
@@ -174,72 +221,182 @@ fun HistoryScreen(
                     )
                     Spacer(modifier = Modifier.height(16.dp))
                     Text(
-                        text = "Loading events...",
+                        text = "Loading…",
                         style = MaterialTheme.typography.bodyLarge,
                         color = TextSecondary
                     )
                 }
-            } else if (events.isEmpty()) {
-                // Empty state
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(32.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center
-                ) {
-                    Text(
-                        text = "📝",
-                        fontSize = 72.sp
-                    )
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Text(
-                        text = "No events today",
-                        style = MaterialTheme.typography.headlineMedium,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Text(
-                        text = "Start tracking your baby's activities",
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = TextSecondary,
-                        textAlign = TextAlign.Center
-                    )
-                }
             } else {
-                // Event list
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(16.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                     state = rememberLazyListState()
                 ) {
-                    items(events, key = { it.rowNumber }) { event ->
-                        EventCard(
-                            event = event,
-                            isSelected = selectedEventRows.contains(event.rowNumber),
-                            isSelectionMode = isSelectionMode,
-                            onSelect = {
-                                HapticFeedback.lightTap(context)
-                                if (isSelectionMode) {
-                                    selectedEventRows = if (selectedEventRows.contains(event.rowNumber)) {
-                                        selectedEventRows - event.rowNumber
-                                    } else {
-                                        selectedEventRows + event.rowNumber
-                                    }
-                                }
-                            },
-                            onLongPress = {
-                                HapticFeedback.mediumImpact(context)
-                                if (!isSelectionMode) {
-                                    isSelectionMode = true
-                                    selectedEventRows = setOf(event.rowNumber)
-                                }
-                            },
-                            onEdit = {
-                                HapticFeedback.lightTap(context)
-                                editingEvent = event
+                    item {
+                        TabRow(
+                            selectedTabIndex = if (insightsDay == InsightsDay.Today) 0 else 1,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Tab(
+                                selected = insightsDay == InsightsDay.Today,
+                                onClick = { insightsDay = InsightsDay.Today },
+                                text = { Text("Today") }
+                            )
+                            Tab(
+                                selected = insightsDay == InsightsDay.Yesterday,
+                                onClick = { insightsDay = InsightsDay.Yesterday },
+                                text = { Text("Yesterday") }
+                            )
+                        }
+                    }
+                    item {
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(16.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+                            )
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(16.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Text(
+                                    text = "Sleep: $sleepDelta $vsLabel",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = TextSecondary
+                                )
+                                Text(
+                                    text = "Feeds: $feedDelta $vsLabel",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = TextSecondary
+                                )
+                                Text(
+                                    text = "Diapers: $diaperDelta $vsLabel",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = TextSecondary
+                                )
+                            }
+                        }
+                    }
+                    item {
+                        InsightSummarySection(
+                            title = "Sleep",
+                            lines = buildList {
+                                add(
+                                    "Total sleep: ${
+                                        sleepAgg.totalSleepMinutes?.let { StatsAggregation.formatShortDurationMinutes(it) } ?: "—"
+                                    }"
+                                )
+                                add(
+                                    "Longest stretch: ${
+                                        sleepAgg.longestSleepMinutes?.let { StatsAggregation.formatShortDurationMinutes(it) } ?: "—"
+                                    }"
+                                )
+                                add(
+                                    "Wake windows: ${
+                                        if (sleepAgg.wakeWindowSummaries.isEmpty()) "—"
+                                        else sleepAgg.wakeWindowSummaries.joinToString()
+                                    }"
+                                )
                             }
                         )
+                    }
+                    item {
+                        InsightSummarySection(
+                            title = "Feeding",
+                            lines = buildList {
+                                add("Feeds logged: ${feedAgg.feedCount}")
+                                if (feedAgg.intervalMinutesBetweenFeeds.isNotEmpty()) {
+                                    val avg = feedAgg.intervalMinutesBetweenFeeds.average().toInt()
+                                    add(
+                                        "Avg. interval between feeds: ${
+                                            StatsAggregation.formatAverageFeedIntervalMinutes(avg)
+                                        }"
+                                    )
+                                } else {
+                                    add("Intervals: — (need 2+ feeds)")
+                                }
+                            }
+                        )
+                    }
+                    item {
+                        InsightSummarySection(
+                            title = "Diapers",
+                            lines = buildList {
+                                add("Changes: ${diaperAgg.diaperCount}")
+                                add("Pee only: ${diaperAgg.peeOnlyCount} · With poop: ${diaperAgg.poopRelatedCount}")
+                            }
+                        )
+                    }
+                    item {
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                        Text(
+                            text = "Log",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(bottom = 4.dp)
+                        )
+                    }
+                    if (displayedEvents.isEmpty()) {
+                        item {
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                                ),
+                                shape = RoundedCornerShape(16.dp)
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(24.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally
+                                ) {
+                                    Text("📝", fontSize = 48.sp)
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Text(
+                                        text = "No events for this day",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                    Text(
+                                        text = "Log from Home — entries appear here.",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = TextSecondary,
+                                        textAlign = TextAlign.Center
+                                    )
+                                }
+                            }
+                        }
+                    } else {
+                        items(displayedEvents, key = { it.rowNumber }) { event ->
+                            EventCard(
+                                event = event,
+                                isSelected = selectedEventRows.contains(event.rowNumber),
+                                isSelectionMode = isSelectionMode,
+                                onSelect = {
+                                    HapticFeedback.lightTap(context)
+                                    if (isSelectionMode) {
+                                        selectedEventRows = if (selectedEventRows.contains(event.rowNumber)) {
+                                            selectedEventRows - event.rowNumber
+                                        } else {
+                                            selectedEventRows + event.rowNumber
+                                        }
+                                    }
+                                },
+                                onLongPress = {
+                                    HapticFeedback.mediumImpact(context)
+                                    if (!isSelectionMode) {
+                                        isSelectionMode = true
+                                        selectedEventRows = setOf(event.rowNumber)
+                                    }
+                                },
+                                onEdit = {
+                                    HapticFeedback.lightTap(context)
+                                    editingEvent = event
+                                }
+                            )
+                        }
                     }
                 }
             }
@@ -269,6 +426,37 @@ fun HistoryScreen(
                 }
             }
         )
+    }
+}
+
+@Composable
+private fun InsightSummarySection(
+    title: String,
+    lines: List<String>
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+            )
+            lines.forEach { line ->
+                Text(
+                    text = line,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = TextSecondary
+                )
+            }
+        }
     }
 }
 
@@ -314,9 +502,11 @@ fun EventCard(
     // Get color based on event type
     val cardColor = remember(event.type) {
         when {
-            event.type.contains("💩") && event.type.contains("💧") -> WarmYellow
-            event.type.contains("💧") -> BabyBlue
-            event.type.contains("🐄") -> SoftPink
+            event.type == SheetEventMarkers.SLEEP_STARTED || event.type == "sleep_started" -> CategorySleep
+            event.type == SheetEventMarkers.SLEEP_ENDED || event.type == "sleep_ended" -> CategorySleep.copy(alpha = 0.85f)
+            event.type.contains("💩") && event.type.contains("💧") -> CategoryPoop
+            event.type.contains("💧") -> CategoryPee
+            event.type.contains("🐄") -> CategoryFeeding
             else -> Color.Gray
         }
     }

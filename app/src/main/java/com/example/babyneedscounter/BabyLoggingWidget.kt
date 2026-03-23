@@ -102,7 +102,7 @@ class BabyLoggingWidget : AppWidgetProvider() {
                         type = eventType,
                         notes = ""
                     )
-                    val success = backendService.logEvent(googleSheetUrl, event)
+                    val success = backendService.logEvent(googleSheetUrl, event).success
                     
                     Handler(Looper.getMainLooper()).post {
                         if (success) {

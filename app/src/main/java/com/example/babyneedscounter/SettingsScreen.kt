@@ -224,7 +224,7 @@ fun SettingsScreen(
                                     notes = "Test from settings"
                                 )
                                 
-                                val success = backendService.logEvent(googleSheetUrl, testEvent)
+                                val success = backendService.logEvent(googleSheetUrl, testEvent).success
                                 if (success) {
                                     testResult = "✓ Web App connection successful!"
                                     webAppUrlVerified = true

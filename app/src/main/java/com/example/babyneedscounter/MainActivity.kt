@@ -1,27 +1,29 @@
 package com.example.babyneedscounter
 
+import android.content.Context
 import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import android.content.Intent
-import android.net.Uri
 import android.appwidget.AppWidgetManager
 import android.content.ComponentName
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -33,31 +35,36 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
-import androidx.compose.material.icons.filled.List
-import androidx.compose.material.icons.filled.OpenInNew
-import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.Surface
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -75,29 +82,161 @@ import androidx.compose.animation.core.tween
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.vectorResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.material.icons.filled.BarChart
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.example.babyneedscounter.ui.theme.BabyNeedsCounterTheme
-import com.example.babyneedscounter.ui.theme.BabyBlue
-import com.example.babyneedscounter.ui.theme.MintGreen
-import com.example.babyneedscounter.ui.theme.SoftPink
+import com.example.babyneedscounter.ui.theme.CategoryFeeding
+import com.example.babyneedscounter.ui.theme.CategoryPee
+import com.example.babyneedscounter.ui.theme.CategoryPoop
+import com.example.babyneedscounter.ui.theme.CategorySleep
 import com.example.babyneedscounter.ui.theme.TextSecondary
-import com.example.babyneedscounter.ui.theme.WarmYellow
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Date
 import java.util.Locale
+
+private enum class ActivityQuickKind {
+    POOP_PEE, PEE, FEED
+}
+
+private fun ActivityQuickKind.emojiType(): String = when (this) {
+    ActivityQuickKind.POOP_PEE -> "💩💧"
+    ActivityQuickKind.PEE -> "💧"
+    ActivityQuickKind.FEED -> "🐄"
+}
+
+private fun ActivityQuickKind.displayName(): String = when (this) {
+    ActivityQuickKind.POOP_PEE -> "Poop & Pee"
+    ActivityQuickKind.PEE -> "Pee"
+    ActivityQuickKind.FEED -> "Feed"
+}
+
+private sealed class HomeSheet {
+    data class ActivityMenu(val kind: ActivityQuickKind) : HomeSheet()
+    data class ActivityTime(val kind: ActivityQuickKind) : HomeSheet()
+    data class ActivityNote(val kind: ActivityQuickKind) : HomeSheet()
+    data object SleepMenu : HomeSheet()
+    data object SleepTime : HomeSheet()
+    data object SleepNote : HomeSheet()
+}
+
+/** Rich text layout for home logging cards (hierarchy + scanability). */
+sealed class HomeCardBodyStyle {
+    data class Standard(val subtitle: String) : HomeCardBodyStyle()
+    data class Feeding(val nextIn: String, val lastAgo: String, val todayFeedCount: Int) : HomeCardBodyStyle()
+    data class Sleep(val state: String, val duration: String) : HomeCardBodyStyle()
+    data class Diaper(val line: String) : HomeCardBodyStyle()
+}
+
+private fun sleepDurationPrimaryLine(
+    todayStats: BackendService.TodayStats?,
+    sleeping: Boolean,
+    awakeFromLastWake: Boolean,
+): String {
+    if (todayStats == null) return "—"
+    return when {
+        sleeping -> todayStats.getSleepDurationLabel()
+        awakeFromLastWake -> {
+            val awake = todayStats.getAwakeDurationLabel()
+            val prev = todayStats.previousWakeWindowLabel
+            if (!prev.isNullOrBlank()) "$awake · Prev: $prev" else awake
+        }
+        else -> "—"
+    }
+}
+
+/** One line: today count + last clock time or "none today". */
+private fun diaperHomeSummaryLine(todayCount: Int, lastTimeIso: String?, clockLocal: String): String {
+    val last = if (lastTimeIso == null) "none today" else clockLocal
+    return "Today: $todayCount · Last: $last"
+}
+
+/** Second line on Feeding card: small "Last: …" with trailing "ago" when appropriate. */
+private fun formatLastFeedSecondaryLine(lastAgo: String): String = when {
+    lastAgo == "—" -> "Last: —"
+    lastAgo.equals("just now", ignoreCase = true) -> "Last: just now"
+    else -> "Last: $lastAgo ago"
+}
+
+/** Sheet emoji (column B) + short UI label for dialogs — never use legacy text for new logs. */
+private fun nextSleepEvent(isSleeping: Boolean): Pair<String, String> =
+    if (isSleeping) SheetEventMarkers.SLEEP_ENDED to "wake-up"
+    else SheetEventMarkers.SLEEP_STARTED to "sleep start"
+
+private fun buildEventTimestamp(useCustom: Boolean, hour: Int, minute: Int): String {
+    return if (useCustom) {
+        val cal = Calendar.getInstance()
+        cal.set(Calendar.HOUR_OF_DAY, hour)
+        cal.set(Calendar.MINUTE, minute)
+        cal.set(Calendar.SECOND, 0)
+        SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).format(cal.time)
+    } else {
+        BackendService.getCurrentTimestamp()
+    }
+}
+
+private suspend fun completeLogAndSnackbar(
+    snackbarHostState: SnackbarHostState,
+    context: Context,
+    backendService: BackendService,
+    googleSheetUrl: String,
+    event: BackendService.BabyEvent,
+    refreshStats: () -> Unit,
+    updateAllWidgets: () -> Unit,
+): Boolean {
+    if (googleSheetUrl.isEmpty()) {
+        HapticFeedback.error(context)
+        snackbarHostState.showSnackbar("Please set up your sheet in Settings first")
+        return false
+    }
+    HapticFeedback.mediumImpact(context)
+    return try {
+        val result = backendService.logEvent(googleSheetUrl, event)
+        if (result.success) {
+            HapticFeedback.success(context)
+            refreshStats()
+            updateAllWidgets()
+            val row = result.rowNumber
+            val snackResult = snackbarHostState.showSnackbar(
+                message = "Saved",
+                actionLabel = if (row != null) "Undo" else null,
+                duration = SnackbarDuration.Short
+            )
+            if (snackResult == SnackbarResult.ActionPerformed && row != null) {
+                val deleted = backendService.deleteEvents(googleSheetUrl, listOf(row))
+                if (deleted) {
+                    refreshStats()
+                    updateAllWidgets()
+                }
+            }
+            true
+        } else {
+            HapticFeedback.error(context)
+            snackbarHostState.showSnackbar("Couldn't save. Check your connection.")
+            false
+        }
+    } catch (e: Exception) {
+        HapticFeedback.error(context)
+        snackbarHostState.showSnackbar("Error: ${e.message}")
+        false
+    }
+}
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -172,19 +311,25 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun AppNavigation() {
     val navController = rememberNavController()
-    
-    NavHost(navController = navController, startDestination = "home") {
-        composable("home") {
-            HomeScreen(
-                onSettingsClick = { navController.navigate("settings") },
-                onHistoryClick = { navController.navigate("history") }
-            )
-        }
-        composable("settings") {
-            SettingsScreen(onBackClick = { navController.popBackStack() })
-        }
-        composable("history") {
-            HistoryScreen(onBackClick = { navController.popBackStack() })
+
+    Scaffold { innerPadding ->
+        NavHost(
+            navController = navController,
+            startDestination = "home",
+            modifier = Modifier.padding(innerPadding)
+        ) {
+            composable("home") {
+                HomeScreen(
+                    onSettingsClick = { navController.navigate("settings") },
+                    onInsightsClick = { navController.navigate("insights") }
+                )
+            }
+            composable("insights") {
+                InsightsScreen(onNavigateBack = { navController.popBackStack() })
+            }
+            composable("settings") {
+                SettingsScreen(onBackClick = { navController.popBackStack() })
+            }
         }
     }
 }
@@ -193,7 +338,7 @@ fun AppNavigation() {
 @Composable
 fun HomeScreen(
     onSettingsClick: () -> Unit,
-    onHistoryClick: () -> Unit
+    onInsightsClick: () -> Unit,
 ) {
     val snackbarHostState = remember { SnackbarHostState() }
     
@@ -203,10 +348,11 @@ fun HomeScreen(
             TopAppBar(
                 title = { },
                 actions = {
-                    IconButton(onClick = onHistoryClick) {
+                    IconButton(onClick = onInsightsClick) {
                         Icon(
-                            imageVector = Icons.Default.List,
-                            contentDescription = "History",
+                            imageVector = Icons.Filled.BarChart,
+                            contentDescription = "Insights and history",
+                            modifier = Modifier.size(28.dp),
                             tint = MaterialTheme.colorScheme.onSurface
                         )
                     }
@@ -214,6 +360,7 @@ fun HomeScreen(
                         Icon(
                             imageVector = Icons.Default.Settings,
                             contentDescription = "Settings",
+                            modifier = Modifier.size(28.dp),
                             tint = MaterialTheme.colorScheme.onSurface
                         )
                     }
@@ -244,18 +391,57 @@ fun BabyNeedsLogger(
     val settingsManager = remember { SettingsManager(context) }
     val backendService = remember { BackendService(context) }
     val googleSheetUrl by settingsManager.googleSheetUrl.collectAsState(initial = "")
-    val googleSheetViewUrl by settingsManager.googleSheetViewUrl.collectAsState(initial = "")
     
     var isLoading by remember { mutableStateOf(false) }
     var isRefreshing by remember { mutableStateOf(false) }
     var todayStats by remember { mutableStateOf<BackendService.TodayStats?>(null) }
     var lastRefresh by remember { mutableStateOf(0L) }
-    var selectedEvents by remember { mutableStateOf(setOf<String>()) }
-    var notes by remember { mutableStateOf("") }
-    var useCustomTime by remember { mutableStateOf(false) }
-    val calendar = remember { java.util.Calendar.getInstance() }
-    var customHour by remember { mutableStateOf(calendar.get(java.util.Calendar.HOUR_OF_DAY)) }
-    var customMinute by remember { mutableStateOf(calendar.get(java.util.Calendar.MINUTE)) }
+    var homeSheet by remember { mutableStateOf<HomeSheet?>(null) }
+    var flashActivity by remember { mutableStateOf<ActivityQuickKind?>(null) }
+    var sleepFlash by remember { mutableStateOf(false) }
+    var timeHour by remember { mutableIntStateOf(0) }
+    var timeMinute by remember { mutableIntStateOf(0) }
+    var noteText by remember { mutableStateOf("") }
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var sleepDurationTick by remember { mutableIntStateOf(0) }
+    
+    LaunchedEffect(flashActivity) {
+        if (flashActivity != null) {
+            kotlinx.coroutines.delay(600)
+            flashActivity = null
+        }
+    }
+    
+    LaunchedEffect(sleepFlash) {
+        if (sleepFlash) {
+            kotlinx.coroutines.delay(600)
+            sleepFlash = false
+        }
+    }
+    
+    LaunchedEffect(homeSheet) {
+        when (homeSheet) {
+            is HomeSheet.ActivityTime, is HomeSheet.SleepTime -> {
+                val c = Calendar.getInstance()
+                timeHour = c.get(Calendar.HOUR_OF_DAY)
+                timeMinute = c.get(Calendar.MINUTE)
+            }
+            is HomeSheet.ActivityNote, is HomeSheet.SleepNote -> {
+                noteText = ""
+            }
+            else -> {}
+        }
+    }
+    
+    val sleeping = todayStats?.isSleeping() == true
+    LaunchedEffect(todayStats?.lastSleepEventTimeISO, todayStats?.lastSleepEventType) {
+        if (todayStats?.lastSleepEventTimeISO != null) {
+            while (true) {
+                kotlinx.coroutines.delay(30_000L)
+                sleepDurationTick++
+            }
+        }
+    }
     
     // Function to refresh stats
     val refreshStats: () -> Unit = {
@@ -362,652 +548,863 @@ fun BabyNeedsLogger(
             Log.e("BabyNeeds", "Error updating widgets", e)
         }
     }
-    
-    val logEvent: (String, String, String) -> Unit = logEvent@{ eventType, eventName, eventNotes ->
-        if (isLoading) return@logEvent
-        
-        // Haptic feedback on button press
-        HapticFeedback.mediumImpact(context)
-        
-        scope.launch {
-            try {
+
+    val onQuickFeedTap: () -> Unit = {
+        if (!isLoading) {
+            scope.launch {
                 isLoading = true
-                Log.d("BabyNeeds", "Logging event: $eventType with notes: $eventNotes")
-                Log.d("BabyNeeds", "Google Sheet URL: $googleSheetUrl")
-                
-                if (googleSheetUrl.isEmpty()) {
-                    HapticFeedback.error(context)
-                    snackbarHostState.showSnackbar("⚠️ Please set up your sheet in Settings first")
-                    Log.w("BabyNeeds", "No Google Sheets URL configured")
+                try {
+                    val ts = buildEventTimestamp(false, 0, 0)
+                    val event = BackendService.BabyEvent(
+                        ts,
+                        ActivityQuickKind.FEED.emojiType(),
+                        ""
+                    )
+                    val ok = completeLogAndSnackbar(
+                        snackbarHostState, context, backendService, googleSheetUrl,
+                        event, refreshStats, updateAllWidgets
+                    )
+                    if (ok) flashActivity = ActivityQuickKind.FEED
+                } finally {
                     isLoading = false
-                    return@launch
                 }
-                
-                // Log current state for debugging
-                Log.d("BabyNeeds", "useCustomTime: $useCustomTime")
-                Log.d("BabyNeeds", "customHour: $customHour, customMinute: $customMinute")
-                
-                // Use custom time if enabled, otherwise use current time
-                val timestamp = if (useCustomTime) {
-                    val customCal = java.util.Calendar.getInstance()
-                    customCal.set(java.util.Calendar.HOUR_OF_DAY, customHour)
-                    customCal.set(java.util.Calendar.MINUTE, customMinute)
-                    customCal.set(java.util.Calendar.SECOND, 0)
-                    val formatted = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).format(customCal.time)
-                    Log.d("BabyNeeds", "Generated custom timestamp: $formatted (from $customHour:$customMinute)")
-                    formatted
-                } else {
-                    val current = BackendService.getCurrentTimestamp()
-                    Log.d("BabyNeeds", "Using current timestamp: $current")
-                    current
+            }
+        }
+    }
+    val onQuickSleepTap: () -> Unit = {
+        if (!isLoading) {
+            val (type, _) = nextSleepEvent(sleeping)
+            scope.launch {
+                isLoading = true
+                try {
+                    val ts = buildEventTimestamp(false, 0, 0)
+                    val event = BackendService.BabyEvent(ts, type, "")
+                    val ok = completeLogAndSnackbar(
+                        snackbarHostState, context, backendService, googleSheetUrl,
+                        event, refreshStats, updateAllWidgets
+                    )
+                    if (ok) sleepFlash = true
+                } finally {
+                    isLoading = false
                 }
-                
-                val event = BackendService.BabyEvent(
-                    timestamp = timestamp,
-                    type = eventType,
-                    notes = eventNotes
+            }
+        }
+    }
+    val onQuickPoopTap: () -> Unit = {
+        if (!isLoading) {
+            scope.launch {
+                isLoading = true
+                try {
+                    val ts = buildEventTimestamp(false, 0, 0)
+                    val event = BackendService.BabyEvent(
+                        ts,
+                        ActivityQuickKind.POOP_PEE.emojiType(),
+                        ""
+                    )
+                    val ok = completeLogAndSnackbar(
+                        snackbarHostState, context, backendService, googleSheetUrl,
+                        event, refreshStats, updateAllWidgets
+                    )
+                    if (ok) flashActivity = ActivityQuickKind.POOP_PEE
+                } finally {
+                    isLoading = false
+                }
+            }
+        }
+    }
+    val onQuickPeeTap: () -> Unit = {
+        if (!isLoading) {
+            scope.launch {
+                isLoading = true
+                try {
+                    val ts = buildEventTimestamp(false, 0, 0)
+                    val event = BackendService.BabyEvent(
+                        ts,
+                        ActivityQuickKind.PEE.emojiType(),
+                        ""
+                    )
+                    val ok = completeLogAndSnackbar(
+                        snackbarHostState, context, backendService, googleSheetUrl,
+                        event, refreshStats, updateAllWidgets
+                    )
+                    if (ok) flashActivity = ActivityQuickKind.PEE
+                } finally {
+                    isLoading = false
+                }
+            }
+        }
+    }
+
+    Box(modifier = modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.background)
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.Top,
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            val timeUntilNextFeed = todayStats?.getTimeUntilNextFeed() ?: "—"
+            val lastFeedAgo = todayStats?.getTimeSinceLastFeed() ?: "—"
+            val feedCountToday = todayStats?.feedCount ?: 0
+            val peeCount = todayStats?.peeCount ?: 0
+            val poopCount = todayStats?.poopCount ?: 0
+
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+                verticalArrangement = Arrangement.spacedBy(HomeCardListSpacing)
+            ) {
+                QuickActionCard(
+                    title = "Feeding",
+                    bodyStyle = HomeCardBodyStyle.Feeding(
+                        nextIn = timeUntilNextFeed,
+                        lastAgo = lastFeedAgo,
+                        todayFeedCount = feedCountToday
+                    ),
+                    icon = "",
+                    color = CategoryFeeding,
+                    iconDrawableRes = R.drawable.marshmallow_feed,
+                    showSuccessFlash = flashActivity == ActivityQuickKind.FEED,
+                    enabled = !isLoading,
+                    onQuickTap = onQuickFeedTap,
+                    onEdit = { homeSheet = HomeSheet.ActivityMenu(ActivityQuickKind.FEED) },
+                    modifier = Modifier.fillMaxWidth(),
+                    compactList = true,
+                    titleTrailing = {
+                        if (isRefreshing) {
+                            CircularProgressIndicator(
+                                modifier = Modifier
+                                    .padding(start = 8.dp)
+                                    .size(18.dp),
+                                strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
                 )
-                
-                Log.d("BabyNeeds", "Final event timestamp: $timestamp (useCustomTime was: $useCustomTime)")
-                
-                snackbarHostState.showSnackbar("Saving $eventName...")
-                val success = backendService.logEvent(googleSheetUrl, event)
-                
-                if (success) {
-                    // Success haptic feedback
-                    HapticFeedback.success(context)
-                    
-                    Log.d("BabyNeeds", "Successfully synced to Google Sheets")
-                    snackbarHostState.showSnackbar("✓ $eventName tracked!")
-                    
-                    // Clear form after successful logging
-                    selectedEvents = setOf()
-                    notes = ""
-                    
-                    // Reset custom time after successful logging
-                    useCustomTime = false
-                    val now = java.util.Calendar.getInstance()
-                    customHour = now.get(java.util.Calendar.HOUR_OF_DAY)
-                    customMinute = now.get(java.util.Calendar.MINUTE)
-                    
-                    // Refresh stats after successful log
-                    refreshStats()
-                    
-                    // Update widgets immediately
-                    updateAllWidgets()
-                } else {
-                    HapticFeedback.error(context)
-                    Log.e("BabyNeeds", "Failed to sync to Google Sheets")
-                    snackbarHostState.showSnackbar("❌ Couldn't save. Check your connection.")
-                }
-            } catch (e: Exception) {
-                HapticFeedback.error(context)
-                Log.e("BabyNeeds", "Error logging event", e)
-                snackbarHostState.showSnackbar("❌ Error: ${e.message}")
-            } finally {
-                isLoading = false
+                SleepQuickCard(
+                    todayStats = todayStats,
+                    sleepDurationTick = sleepDurationTick,
+                    showSuccessFlash = sleepFlash,
+                    enabled = !isLoading,
+                    onQuickTap = onQuickSleepTap,
+                    onEdit = { homeSheet = HomeSheet.SleepMenu },
+                    onSleepWindowTap = {
+                        scope.launch {
+                            snackbarHostState.showSnackbar("Sleep window — coming soon")
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    compactList = true,
+                )
+                QuickActionCard(
+                    title = "Poop",
+                        bodyStyle = HomeCardBodyStyle.Diaper(
+                            diaperHomeSummaryLine(
+                                poopCount,
+                                todayStats?.lastPoopTimeISO,
+                                todayStats?.getLastPoopClock() ?: "—"
+                            )
+                        ),
+                    icon = "",
+                    color = CategoryPoop,
+                    iconDrawableRes = R.drawable.marshmallow_poop,
+                    showSuccessFlash = flashActivity == ActivityQuickKind.POOP_PEE,
+                    enabled = !isLoading,
+                    onQuickTap = onQuickPoopTap,
+                    onEdit = { homeSheet = HomeSheet.ActivityMenu(ActivityQuickKind.POOP_PEE) },
+                    modifier = Modifier.fillMaxWidth(),
+                    compactList = true
+                )
+                QuickActionCard(
+                    title = "Pee",
+                        bodyStyle = HomeCardBodyStyle.Diaper(
+                            diaperHomeSummaryLine(
+                                peeCount,
+                                todayStats?.lastPeeTimeISO,
+                                todayStats?.getLastPeeClock() ?: "—"
+                            )
+                        ),
+                    icon = "",
+                    color = CategoryPee,
+                    iconDrawableRes = R.drawable.marshmallow_pee,
+                    showSuccessFlash = flashActivity == ActivityQuickKind.PEE,
+                    enabled = !isLoading,
+                    onQuickTap = onQuickPeeTap,
+                    onEdit = { homeSheet = HomeSheet.ActivityMenu(ActivityQuickKind.PEE) },
+                    modifier = Modifier.fillMaxWidth(),
+                    compactList = true
+                )
             }
         }
     }
     
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 20.dp, vertical = 16.dp),
-        verticalArrangement = Arrangement.Top,
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        // Header Section - More compact
-        Spacer(modifier = Modifier.height(16.dp))
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+    if (homeSheet != null) {
+        ModalBottomSheet(
+            onDismissRequest = { homeSheet = null },
+            sheetState = sheetState
         ) {
-            Column {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "Baby Needs",
-                        style = MaterialTheme.typography.headlineLarge,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 32.sp,
-                        color = MaterialTheme.colorScheme.onBackground
-                    )
-                    // Refresh indicator
-                    if (isRefreshing) {
-                        Spacer(modifier = Modifier.width(12.dp))
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(24.dp),
-                            strokeWidth = 2.dp,
-                            color = MaterialTheme.colorScheme.primary
+            when (val s = homeSheet!!) {
+                is HomeSheet.ActivityMenu -> {
+                    Column(Modifier.padding(horizontal = 8.dp, vertical = 8.dp)) {
+                        Text(
+                            "More options",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                        )
+                        ListItem(
+                            headlineContent = { Text("🕒 Log from different time") },
+                            modifier = Modifier.clickable {
+                                homeSheet = HomeSheet.ActivityTime(s.kind)
+                            }
+                        )
+                        HorizontalDivider()
+                        ListItem(
+                            headlineContent = { Text("📝 Add note") },
+                            modifier = Modifier.clickable {
+                                homeSheet = HomeSheet.ActivityNote(s.kind)
+                            }
                         )
                     }
                 }
-                Text(
-                    text = "Track your baby's daily activities",
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontSize = 14.sp,
-                    color = TextSecondary,
-                    modifier = Modifier.padding(top = 4.dp)
-                )
-            }
-            
-            // Link to Google Sheet - moved to top right
-            if (googleSheetViewUrl.isNotEmpty()) {
-                IconButton(
-                    onClick = {
-                        try {
-                            // Try to open in Google Sheets app first
-                            val sheetsAppIntent = Intent(Intent.ACTION_VIEW, Uri.parse(googleSheetViewUrl)).apply {
-                                setPackage("com.google.android.apps.docs.editors.sheets")
-                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                            }
-                            context.startActivity(sheetsAppIntent)
-                            Log.d("BabyNeeds", "Opened in Google Sheets app")
-                        } catch (e: Exception) {
-                            // If Google Sheets app not available, open in browser
-                            try {
-                                Log.d("BabyNeeds", "Google Sheets app not found, opening in browser")
-                                val browserIntent = Intent(Intent.ACTION_VIEW, Uri.parse(googleSheetViewUrl)).apply {
-                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                }
-                                context.startActivity(browserIntent)
-                            } catch (e2: Exception) {
-                                Log.e("BabyNeeds", "Failed to open Google Sheet", e2)
-                            }
-                        }
-                    }
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.OpenInNew,
-                        contentDescription = "View Progress",
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(28.dp)
-                    )
-                }
-            }
-        }
-        
-        Spacer(modifier = Modifier.height(16.dp))
-        
-        // Feed Times Card - Countdown & Next Feed Time
-        val timeUntilNextFeed = todayStats?.getTimeUntilNextFeed() ?: "—"
-        val nextFeedTime = todayStats?.getNextFeedTime() ?: "—"
-        
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(bottom = 16.dp),
-            shape = RoundedCornerShape(20.dp),
-            colors = CardDefaults.cardColors(
-                containerColor = SoftPink.copy(alpha = 0.12f)
-            ),
-            elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
-            border = BorderStroke(2.dp, SoftPink.copy(alpha = 0.3f))
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp),
-                horizontalArrangement = Arrangement.SpaceEvenly,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                // Next Feed Time
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text(
-                        text = "Next Feed",
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = TextSecondary
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically
+                is HomeSheet.ActivityTime -> {
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         Text(
-                            text = "~",
-                            style = MaterialTheme.typography.headlineLarge,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 28.sp,
-                            color = SoftPink.copy(alpha = 0.7f),
-                            modifier = Modifier.padding(end = 4.dp)
+                            "Log ${s.kind.displayName()}",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold
                         )
+                        Spacer(Modifier.height(12.dp))
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(120.dp),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            NumberPicker(
+                                value = timeHour,
+                                range = 0..23,
+                                onValueChange = { timeHour = it },
+                                modifier = Modifier.weight(1f)
+                            )
+                            Text(
+                                ":",
+                                style = MaterialTheme.typography.headlineLarge,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 8.dp)
+                            )
+                            NumberPicker(
+                                value = timeMinute,
+                                range = 0..59,
+                                onValueChange = { timeMinute = it },
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                        Spacer(Modifier.height(16.dp))
+                        Button(
+                            onClick = {
+                                scope.launch {
+                                    isLoading = true
+                                    try {
+                                        val ts = buildEventTimestamp(true, timeHour, timeMinute)
+                                        val event = BackendService.BabyEvent(
+                                            ts,
+                                            s.kind.emojiType(),
+                                            ""
+                                        )
+                                        val ok = completeLogAndSnackbar(
+                                            snackbarHostState, context, backendService,
+                                            googleSheetUrl, event, refreshStats, updateAllWidgets
+                                        )
+                                        if (ok) {
+                                            flashActivity = s.kind
+                                            homeSheet = null
+                                        }
+                                    } finally {
+                                        isLoading = false
+                                    }
+                                }
+                            },
+                            enabled = !isLoading,
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(16.dp)
+                        ) {
+                            Text("Save")
+                        }
+                    }
+                }
+                is HomeSheet.ActivityNote -> {
+                    Column(Modifier.padding(16.dp)) {
                         Text(
-                            text = nextFeedTime,
-                            style = MaterialTheme.typography.headlineLarge,
+                            "Note for ${s.kind.displayName()}",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(Modifier.height(12.dp))
+                        OutlinedTextField(
+                            value = noteText,
+                            onValueChange = { noteText = it },
+                            modifier = Modifier.fillMaxWidth(),
+                            label = { Text("Note") },
+                            singleLine = false,
+                            minLines = 2,
+                            shape = RoundedCornerShape(12.dp)
+                        )
+                        Spacer(Modifier.height(16.dp))
+                        Button(
+                            onClick = {
+                                scope.launch {
+                                    isLoading = true
+                                    try {
+                                        val ts = buildEventTimestamp(false, 0, 0)
+                                        val event = BackendService.BabyEvent(
+                                            ts,
+                                            s.kind.emojiType(),
+                                            noteText.trim()
+                                        )
+                                        val ok = completeLogAndSnackbar(
+                                            snackbarHostState, context, backendService,
+                                            googleSheetUrl, event, refreshStats, updateAllWidgets
+                                        )
+                                        if (ok) {
+                                            flashActivity = s.kind
+                                            homeSheet = null
+                                        }
+                                    } finally {
+                                        isLoading = false
+                                    }
+                                }
+                            },
+                            enabled = !isLoading,
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(16.dp)
+                        ) {
+                            Text("Save")
+                        }
+                    }
+                }
+                HomeSheet.SleepMenu -> {
+                    Column(Modifier.padding(horizontal = 8.dp, vertical = 8.dp)) {
+                        Text(
+                            "More options",
+                            style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
-                            fontSize = 32.sp,
-                            color = SoftPink
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                        )
+                        ListItem(
+                            headlineContent = { Text("🕒 Log from different time") },
+                            modifier = Modifier.clickable { homeSheet = HomeSheet.SleepTime }
+                        )
+                        HorizontalDivider()
+                        ListItem(
+                            headlineContent = { Text("📝 Add note") },
+                            modifier = Modifier.clickable { homeSheet = HomeSheet.SleepNote }
                         )
                     }
                 }
-                
-                // Divider
-                Box(
-                    modifier = Modifier
-                        .width(2.dp)
-                        .height(60.dp)
-                        .background(SoftPink.copy(alpha = 0.3f))
-                )
-                
-                // Next Feed Countdown
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text(
-                        text = "Next Feed In",
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = TextSecondary
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = timeUntilNextFeed,
-                        style = MaterialTheme.typography.headlineLarge,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 32.sp,
-                        color = SoftPink
-                    )
-                }
-            }
-        }
-        
-        // Quick Stats Row - 3 Trackers
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            val peeCount = todayStats?.peeCount ?: 0
-            val poopCount = todayStats?.poopCount ?: 0
-            val feedTime = todayStats?.getTimeSinceLastFeed() ?: "—"
-            
-            QuickStatCard("💧 Pee", "$peeCount", "times")
-            QuickStatCard("💩 Poop", "$poopCount", "times")
-            QuickStatCard("🐄 Feed", feedTime, "ago")
-        }
-        
-        Spacer(modifier = Modifier.height(16.dp))
-        
-        // Multi-Select Action Cards - more compact spacing
-        Column(
-            modifier = Modifier.fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            SelectableActionCard(
-                title = "Diaper Change",
-                subtitle = "Poop & Pee",
-                icon = "💩",
-                color = WarmYellow,
-                isSelected = selectedEvents.contains("poop_pee"),
-                onToggle = {
-                    selectedEvents = if (selectedEvents.contains("poop_pee")) {
-                        selectedEvents - "poop_pee"
-                    } else {
-                        selectedEvents + "poop_pee"
-                    }
-                },
-                enabled = !isLoading
-            )
-            
-            SelectableActionCard(
-                title = "Diaper Change",
-                subtitle = "Pee Only",
-                icon = "💧",
-                color = BabyBlue,
-                isSelected = selectedEvents.contains("pee"),
-                onToggle = {
-                    selectedEvents = if (selectedEvents.contains("pee")) {
-                        selectedEvents - "pee"
-                    } else {
-                        selectedEvents + "pee"
-                    }
-                },
-                enabled = !isLoading
-            )
-            
-            SelectableActionCard(
-                title = "Feeding",
-                subtitle = "Breastmilk",
-                icon = "🐄",
-                color = SoftPink,
-                isSelected = selectedEvents.contains("feed"),
-                onToggle = {
-                    selectedEvents = if (selectedEvents.contains("feed")) {
-                        selectedEvents - "feed"
-                    } else {
-                        selectedEvents + "feed"
-                    }
-                },
-                enabled = !isLoading
-            )
-        }
-        
-        // Notes input - always visible
-        Spacer(modifier = Modifier.height(12.dp))
-        androidx.compose.material3.OutlinedTextField(
-            value = notes,
-            onValueChange = { notes = it },
-            modifier = Modifier.fillMaxWidth(),
-            label = { Text("Notes (optional)") },
-            placeholder = { Text("e.g., yellow, runny, fussy") },
-            singleLine = true,
-            enabled = !isLoading,
-            shape = RoundedCornerShape(12.dp)
-        )
-        
-        // Custom Time Section
-        Spacer(modifier = Modifier.height(12.dp))
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Text(
-                text = "Log from different time",
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onBackground
-            )
-            androidx.compose.material3.Switch(
-                checked = useCustomTime,
-                onCheckedChange = { useCustomTime = it },
-                enabled = !isLoading
-            )
-        }
-        
-        // Time Picker - shown when custom time is enabled
-        if (useCustomTime) {
-            Spacer(modifier = Modifier.height(8.dp))
-            
-            // Vertical scroll wheel time picker
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(120.dp),
-                horizontalArrangement = Arrangement.Center,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                // Hour picker
-                NumberPicker(
-                    value = customHour,
-                    range = 0..23,
-                    onValueChange = { customHour = it },
-                    modifier = Modifier.weight(1f)
-                )
-                
-                Text(
-                    text = ":",
-                    style = MaterialTheme.typography.headlineLarge,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(horizontal = 8.dp)
-                )
-                
-                // Minute picker
-                NumberPicker(
-                    value = customMinute,
-                    range = 0..59,
-                    onValueChange = { customMinute = it },
-                    modifier = Modifier.weight(1f)
-                )
-            }
-            
-            // Reset to current time button
-            androidx.compose.material3.TextButton(
-                onClick = {
-                    val now = java.util.Calendar.getInstance()
-                    customHour = now.get(java.util.Calendar.HOUR_OF_DAY)
-                    customMinute = now.get(java.util.Calendar.MINUTE)
-                },
-                enabled = !isLoading
-            ) {
-                Text("Reset to now", fontSize = 12.sp)
-            }
-        }
-        
-        // Log Button - compact with animation
-        if (selectedEvents.isNotEmpty()) {
-            Spacer(modifier = Modifier.height(12.dp))
-            
-            // Button scale animation
-            val buttonScale by animateFloatAsState(
-                targetValue = if (isLoading) 0.95f else 1.0f,
-                animationSpec = spring(
-                    dampingRatio = Spring.DampingRatioMediumBouncy,
-                    stiffness = Spring.StiffnessMedium
-                ),
-                label = "button_scale"
-            )
-            
-            Button(
-                onClick = {
-                    // Convert to emoji types
-                    val emojiType = selectedEvents.joinToString("") { type ->
-                        when(type) {
-                            "poop_pee" -> "💩💧"
-                            "pee" -> "💧"
-                            "feed" -> "🐄"
-                            else -> type
+                HomeSheet.SleepTime -> {
+                    val (nextEmoji, logLabel) = nextSleepEvent(sleeping)
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            "Log $logLabel",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(Modifier.height(12.dp))
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(120.dp),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            NumberPicker(
+                                value = timeHour,
+                                range = 0..23,
+                                onValueChange = { timeHour = it },
+                                modifier = Modifier.weight(1f)
+                            )
+                            Text(
+                                ":",
+                                style = MaterialTheme.typography.headlineLarge,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 8.dp)
+                            )
+                            NumberPicker(
+                                value = timeMinute,
+                                range = 0..59,
+                                onValueChange = { timeMinute = it },
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                        Spacer(Modifier.height(16.dp))
+                        Button(
+                            onClick = {
+                                scope.launch {
+                                    isLoading = true
+                                    try {
+                                        val ts = buildEventTimestamp(true, timeHour, timeMinute)
+                                        val event = BackendService.BabyEvent(ts, nextEmoji, "")
+                                        val ok = completeLogAndSnackbar(
+                                            snackbarHostState, context, backendService,
+                                            googleSheetUrl, event, refreshStats, updateAllWidgets
+                                        )
+                                        if (ok) {
+                                            sleepFlash = true
+                                            homeSheet = null
+                                        }
+                                    } finally {
+                                        isLoading = false
+                                    }
+                                }
+                            },
+                            enabled = !isLoading,
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(16.dp)
+                        ) {
+                            Text("Save")
                         }
                     }
-                    val displayName = selectedEvents.joinToString(" + ") { type ->
-                        when(type) {
-                            "poop_pee" -> "Poop & Pee"
-                            "pee" -> "Pee"
-                            "feed" -> "Feed"
-                            else -> type
+                }
+                HomeSheet.SleepNote -> {
+                    val (nextEmoji, noteLabel) = nextSleepEvent(sleeping)
+                    Column(Modifier.padding(16.dp)) {
+                        Text(
+                            "Note for $noteLabel",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(Modifier.height(12.dp))
+                        OutlinedTextField(
+                            value = noteText,
+                            onValueChange = { noteText = it },
+                            modifier = Modifier.fillMaxWidth(),
+                            label = { Text("Note") },
+                            singleLine = false,
+                            minLines = 2,
+                            shape = RoundedCornerShape(12.dp)
+                        )
+                        Spacer(Modifier.height(16.dp))
+                        Button(
+                            onClick = {
+                                scope.launch {
+                                    isLoading = true
+                                    try {
+                                        val ts = buildEventTimestamp(false, 0, 0)
+                                        val event = BackendService.BabyEvent(
+                                            ts,
+                                            nextEmoji,
+                                            noteText.trim()
+                                        )
+                                        val ok = completeLogAndSnackbar(
+                                            snackbarHostState, context, backendService,
+                                            googleSheetUrl, event, refreshStats, updateAllWidgets
+                                        )
+                                        if (ok) {
+                                            sleepFlash = true
+                                            homeSheet = null
+                                        }
+                                    } finally {
+                                        isLoading = false
+                                    }
+                                }
+                            },
+                            enabled = !isLoading,
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(16.dp)
+                        ) {
+                            Text("Save")
                         }
                     }
-                    logEvent(emojiType, displayName, notes)
-                    // Note: Reset logic moved inside logEvent to avoid race condition
-                },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(56.dp)
-                    .scale(buttonScale),
-                shape = RoundedCornerShape(16.dp),
-                enabled = !isLoading
-            ) {
-                if (isLoading) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(28.dp),
-                        color = MaterialTheme.colorScheme.onPrimary
-                    )
-                } else {
-                    Text(
-                        text = "Track (${selectedEvents.size})",
-                        style = MaterialTheme.typography.titleLarge,
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold
-                    )
                 }
             }
-        }
-        
-        if (isLoading && selectedEvents.isEmpty()) {
-            Spacer(modifier = Modifier.height(16.dp))
-            CircularProgressIndicator(
-                modifier = Modifier.size(40.dp)
-            )
         }
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+/** Non-compact home cards: mascot column height (primary visual; no extra layers). */
+private val QuickLogIconSize = 96.dp
+
+/** Compact list: dominant mascot column (fills most of row height on typical two-line cards). */
+private val QuickLogIconSizeCompact = 96.dp
+
+/** Home quick-log cards (compact): tight padding so large icons still fit without growing the card much. */
+private val CompactCardPaddingStart = 12.dp
+private val CompactCardPaddingEnd = 6.dp
+private val CompactCardPaddingVertical = 12.dp
+private val HomeCardListSpacing = 16.dp
+
+/**
+ * Home card: [icon column | text column] (tap to log) + right-aligned edit hit target, vertically centered.
+ * Optional [onLongClickPrimary] (e.g. Sleep → sleep window placeholder): long-press on the main tap area; tap still logs.
+ */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun SelectableActionCard(
+private fun QuickLogCardLayout(
+    iconEmoji: String,
+    /** When set, shown instead of [iconEmoji] (e.g. Sleep card marshmallow art). */
+    iconDrawableRes: Int? = null,
+    accentColor: Color,
     title: String,
-    subtitle: String,
-    icon: String,
-    color: Color,
-    isSelected: Boolean,
-    onToggle: () -> Unit,
-    enabled: Boolean = true
+    bodyStyle: HomeCardBodyStyle,
+    showSuccessFlash: Boolean,
+    onQuickTap: () -> Unit,
+    onEdit: () -> Unit,
+    onLongClickPrimary: (() -> Unit)? = null,
+    enabled: Boolean,
+    animationLabel: String,
+    modifier: Modifier = Modifier.fillMaxWidth(),
+    compactList: Boolean = false,
+    titleTrailing: (@Composable () -> Unit)? = null,
 ) {
     val context = LocalContext.current
-    
-    // Animation for selection
+    val padStart = if (compactList) CompactCardPaddingStart else 16.dp
+    val padEnd = if (compactList) CompactCardPaddingEnd else 10.dp
+    val padTop = if (compactList) CompactCardPaddingVertical else 12.dp
+    val padBottom = if (compactList) CompactCardPaddingVertical else 12.dp
+    val iconSize = if (compactList) QuickLogIconSizeCompact else QuickLogIconSize
+    val iconColumnWidth = if (compactList) 102.dp else (QuickLogIconSize + 8.dp)
+    val emojiSp = if (compactList) 46.sp else 40.sp
+    val titleSp = if (compactList) 13.sp else 18.sp
+    val titleLineH = if (compactList) 14.sp else 20.sp
+    val gapIconToText = if (compactList) 10.dp else 14.dp
+    val feedPrimary = if (compactList) 28.sp else 20.sp
+    val feedPrimaryLineH = if (compactList) 30.sp else 24.sp
+    val feedSecondary = if (compactList) 12.sp else 13.sp
+    val feedSecondaryLineH = if (compactList) 13.sp else 15.sp
+    val sleepStateSp = if (compactList) 12.sp else 16.sp
+    val sleepStateLineH = if (compactList) 13.sp else 17.sp
+    val sleepDurationSp = if (compactList) 32.sp else 26.sp
+    val sleepDurationLineH = if (compactList) 34.sp else 28.sp
+    val diaperLineSp = if (compactList) 14.sp else 16.sp
+    val diaperLineH = if (compactList) 15.sp else 17.sp
+    val standardSubSp = if (compactList) 14.sp else 14.sp
+    val hideTitleRow = compactList && when (bodyStyle) {
+        is HomeCardBodyStyle.Feeding, is HomeCardBodyStyle.Sleep, is HomeCardBodyStyle.Diaper -> true
+        else -> false
+    }
     val scale by animateFloatAsState(
-        targetValue = if (isSelected) 1.0f else 0.98f,
+        targetValue = if (showSuccessFlash) 1.02f else 1f,
         animationSpec = spring(
             dampingRatio = Spring.DampingRatioMediumBouncy,
             stiffness = Spring.StiffnessMedium
         ),
-        label = "card_scale"
+        label = animationLabel
     )
-    
     Card(
-        onClick = {
-            // Haptic feedback on tap
-            HapticFeedback.lightTap(context)
-            onToggle()
-        },
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(90.dp)
-            .scale(scale),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = if (isSelected) 
-                color.copy(alpha = 0.15f) 
-            else 
-                MaterialTheme.colorScheme.surface
-        ),
-        elevation = CardDefaults.cardElevation(
-            defaultElevation = if (isSelected) 6.dp else 2.dp,
-            pressedElevation = 8.dp
-        ),
-        border = if (isSelected) 
-            BorderStroke(3.dp, color) 
-        else null,
-        enabled = enabled
+        modifier = modifier.scale(scale),
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 3.dp, pressedElevation = 5.dp)
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 20.dp, vertical = 16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
+        Box(modifier = Modifier.fillMaxWidth()) {
             Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = padStart, end = padEnd, top = padTop, bottom = padBottom),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Icon Circle
+                Row(
+                    modifier = Modifier
+                        .weight(1f)
+                        .then(
+                            if (onLongClickPrimary != null) {
+                                Modifier.combinedClickable(
+                                    enabled = enabled,
+                                    onLongClickLabel = "Sleep window",
+                                    onLongClick = {
+                                        HapticFeedback.mediumImpact(context)
+                                        onLongClickPrimary()
+                                    },
+                                    onClick = {
+                                        HapticFeedback.lightTap(context)
+                                        onQuickTap()
+                                    }
+                                )
+                            } else {
+                                Modifier.clickable(enabled = enabled) {
+                                    HapticFeedback.lightTap(context)
+                                    onQuickTap()
+                                }
+                            }
+                        ),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .width(iconColumnWidth)
+                            .height(iconSize),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        val drawableId = iconDrawableRes
+                        if (drawableId != null) {
+                            Image(
+                                painter = painterResource(drawableId),
+                                contentDescription = null,
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(Color.Transparent),
+                                contentScale = ContentScale.Fit
+                            )
+                        } else {
+                            Text(
+                                text = iconEmoji,
+                                fontSize = emojiSp,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.width(gapIconToText))
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(end = 2.dp),
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                    if (!hideTitleRow) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = title,
+                                style = MaterialTheme.typography.titleLarge,
+                                fontSize = titleSp,
+                                lineHeight = titleLineH,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                modifier = Modifier.weight(1f)
+                            )
+                            titleTrailing?.invoke()
+                        }
+                    }
+                    when (bodyStyle) {
+                        is HomeCardBodyStyle.Feeding -> {
+                            if (hideTitleRow) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = "Next in ${bodyStyle.nextIn}",
+                                            fontSize = feedPrimary,
+                                            fontWeight = FontWeight.SemiBold,
+                                            lineHeight = feedPrimaryLineH,
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Text(
+                                            text = "${formatLastFeedSecondaryLine(bodyStyle.lastAgo)} · Today: ${bodyStyle.todayFeedCount} feeds",
+                                            fontSize = feedSecondary,
+                                            lineHeight = feedSecondaryLineH,
+                                            color = TextSecondary,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                    titleTrailing?.invoke()
+                                }
+                            } else {
+                                Text(
+                                    text = "Next in ${bodyStyle.nextIn}",
+                                    fontSize = feedPrimary,
+                                    fontWeight = FontWeight.SemiBold,
+                                    lineHeight = feedPrimaryLineH,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    text = "${formatLastFeedSecondaryLine(bodyStyle.lastAgo)} · Today: ${bodyStyle.todayFeedCount} feeds",
+                                    fontSize = feedSecondary,
+                                    lineHeight = feedSecondaryLineH,
+                                    color = TextSecondary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                        is HomeCardBodyStyle.Sleep -> {
+                            Text(
+                                text = bodyStyle.state,
+                                fontSize = sleepStateSp,
+                                fontWeight = FontWeight.Medium,
+                                lineHeight = sleepStateLineH,
+                                color = TextSecondary,
+                                maxLines = 1
+                            )
+                            Text(
+                                text = bodyStyle.duration,
+                                fontSize = sleepDurationSp,
+                                fontWeight = FontWeight.Bold,
+                                lineHeight = sleepDurationLineH,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        is HomeCardBodyStyle.Diaper -> {
+                            Text(
+                                text = bodyStyle.line,
+                                fontSize = diaperLineSp,
+                                fontWeight = FontWeight.Medium,
+                                lineHeight = diaperLineH,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1
+                            )
+                        }
+                        is HomeCardBodyStyle.Standard -> {
+                            Text(
+                                text = bodyStyle.subtitle,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontSize = standardSubSp,
+                                lineHeight = 16.sp,
+                                color = TextSecondary,
+                                maxLines = 3
+                            )
+                        }
+                    }
+                }
+                }
+                Spacer(modifier = Modifier.width(if (compactList) 6.dp else 8.dp))
                 Box(
                     modifier = Modifier
-                        .size(56.dp)
-                        .clip(CircleShape)
-                        .background(color.copy(alpha = 0.25f)),
+                        .size(if (compactList) 50.dp else 48.dp)
+                        .clickable(enabled = enabled) {
+                            HapticFeedback.lightTap(context)
+                            onEdit()
+                        },
                     contentAlignment = Alignment.Center
                 ) {
-                    Text(
-                        text = icon,
-                        fontSize = 28.sp
-                    )
-                }
-                
-                Spacer(modifier = Modifier.width(16.dp))
-                
-                // Text Column
-                Column {
-                    Text(
-                        text = title,
-                        style = MaterialTheme.typography.titleLarge,
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Text(
-                        text = subtitle,
-                        style = MaterialTheme.typography.bodyLarge,
-                        fontSize = 14.sp,
-                        color = TextSecondary
+                    Icon(
+                        imageVector = Icons.Default.Edit,
+                        contentDescription = "More options",
+                        modifier = Modifier.size(if (compactList) 28.dp else 24.dp),
+                        tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.34f)
                     )
                 }
             }
-            
-            // Selection indicator or colored bar
-            if (isSelected) {
+            if (showSuccessFlash) {
                 Box(
                     modifier = Modifier
-                        .size(26.dp)
-                        .clip(CircleShape)
-                        .background(color),
+                        .matchParentSize()
+                        .background(accentColor.copy(alpha = 0.16f)),
                     contentAlignment = Alignment.Center
                 ) {
-                    Text(
-                        text = "✓",
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color.White
-                    )
+                    Box(
+                        modifier = Modifier
+                            .size(42.dp)
+                            .clip(CircleShape)
+                            .background(accentColor),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "✓",
+                            fontSize = 20.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
+                        )
+                    }
                 }
-            } else {
-                Box(
-                    modifier = Modifier
-                        .size(4.dp, 40.dp)
-                        .clip(RoundedCornerShape(2.dp))
-                        .background(color)
-                )
             }
         }
     }
 }
 
 @Composable
-fun RowScope.QuickStatCard(label: String, value: String, subtitle: String) {
-    Card(
-        modifier = Modifier
-            .weight(1f)
-            .height(100.dp)
-            .padding(horizontal = 4.dp),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant
-        ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 3.dp)
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(8.dp),
-            verticalArrangement = Arrangement.Center,
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Text(
-                text = label,
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = FontWeight.SemiBold,
-                color = TextSecondary,
-                fontSize = 11.sp,
-                textAlign = TextAlign.Center
-            )
-            Spacer(modifier = Modifier.height(2.dp))
-            Text(
-                text = value,
-                style = MaterialTheme.typography.headlineLarge,
-                fontWeight = FontWeight.Bold,
-                fontSize = 24.sp,
-                color = MaterialTheme.colorScheme.onSurface,
-                textAlign = TextAlign.Center
-            )
-            Text(
-                text = subtitle,
-                style = MaterialTheme.typography.bodyMedium,
-                color = TextSecondary,
-                fontSize = 10.sp,
-                textAlign = TextAlign.Center
-            )
-        }
+fun QuickActionCard(
+    title: String,
+    bodyStyle: HomeCardBodyStyle,
+    icon: String,
+    color: Color,
+    showSuccessFlash: Boolean,
+    onQuickTap: () -> Unit,
+    onEdit: () -> Unit,
+    enabled: Boolean = true,
+    modifier: Modifier = Modifier.fillMaxWidth(),
+    compactList: Boolean = false,
+    titleTrailing: (@Composable () -> Unit)? = null,
+    /** When set, shown instead of [icon] (e.g. Feeding cow art). */
+    iconDrawableRes: Int? = null,
+) {
+    QuickLogCardLayout(
+        iconEmoji = icon,
+        iconDrawableRes = iconDrawableRes,
+        accentColor = color,
+        title = title,
+        bodyStyle = bodyStyle,
+        showSuccessFlash = showSuccessFlash,
+        onQuickTap = onQuickTap,
+        onEdit = onEdit,
+        onLongClickPrimary = null,
+        enabled = enabled,
+        animationLabel = "quick_card_flash",
+        modifier = modifier,
+        compactList = compactList,
+        titleTrailing = titleTrailing,
+    )
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+fun SleepQuickCard(
+    todayStats: BackendService.TodayStats?,
+    sleepDurationTick: Int,
+    showSuccessFlash: Boolean,
+    onQuickTap: () -> Unit,
+    onEdit: () -> Unit,
+    /** Long-press on card body — sleep window flow (TBD). Tap still quick-logs sleep/wake. */
+    onSleepWindowTap: (() -> Unit)? = null,
+    enabled: Boolean = true,
+    modifier: Modifier = Modifier.fillMaxWidth(),
+    compactList: Boolean = false,
+) {
+    val sleeping = todayStats?.isSleeping() == true
+    val awakeFromLastWake = todayStats?.isAwakeFromLastSleepEvent() == true
+    val bodyStyle = remember(sleepDurationTick, sleeping, awakeFromLastWake, todayStats) {
+        val state = if (sleeping) "Sleeping" else "Awake"
+        HomeCardBodyStyle.Sleep(
+            state = state,
+            duration = sleepDurationPrimaryLine(todayStats, sleeping, awakeFromLastWake)
+        )
     }
+    QuickLogCardLayout(
+        iconEmoji = "",
+        iconDrawableRes = if (sleeping) {
+            R.drawable.marshmallow_sleep
+        } else {
+            R.drawable.marshmallow_awake
+        },
+        accentColor = CategorySleep,
+        title = "Sleep",
+        bodyStyle = bodyStyle,
+        showSuccessFlash = showSuccessFlash,
+        onQuickTap = onQuickTap,
+        onEdit = onEdit,
+        onLongClickPrimary = onSleepWindowTap,
+        enabled = enabled,
+        animationLabel = "sleep_card_flash",
+        modifier = modifier,
+        compactList = compactList,
+    )
 }
 
 @Composable

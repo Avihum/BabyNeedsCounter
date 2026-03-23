@@ -40,12 +40,29 @@
             android:background="@drawable/widget_button_yellow"
             android:padding="4dp">
 
-            <TextView
+            <LinearLayout
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="💩💧"
-                android:textSize="26sp"
-                android:gravity="center" />
+                android:orientation="horizontal"
+                android:gravity="center">
+
+                <ImageView
+                    android:background="@android:color/transparent"
+                    android:layout_width="26dp"
+                    android:layout_height="26dp"
+                    android:src="@drawable/marshmallow_poop"
+                    android:scaleType="fitCenter"
+                    android:contentDescription="@null" />
+
+                <ImageView
+                    android:background="@android:color/transparent"
+                    android:layout_width="26dp"
+                    android:layout_height="26dp"
+                    android:layout_marginStart="2dp"
+                    android:src="@drawable/marshmallow_pee"
+                    android:scaleType="fitCenter"
+                    android:contentDescription="@null" />
+            </LinearLayout>
 
             <TextView
                 android:layout_width="wrap_content"
@@ -72,12 +89,13 @@
             android:background="@drawable/widget_button_blue"
             android:padding="4dp">
 
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="💧"
-                android:textSize="26sp"
-                android:gravity="center" />
+            <ImageView
+                android:background="@android:color/transparent"
+                android:layout_width="28dp"
+                android:layout_height="28dp"
+                android:src="@drawable/marshmallow_pee"
+                android:scaleType="fitCenter"
+                android:contentDescription="@null" />
 
             <TextView
                 android:layout_width="wrap_content"
@@ -103,12 +121,13 @@
             android:background="@drawable/widget_button_pink"
             android:padding="4dp">
 
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="🐄"
-                android:textSize="26sp"
-                android:gravity="center" />
+            <ImageView
+                android:background="@android:color/transparent"
+                android:layout_width="28dp"
+                android:layout_height="28dp"
+                android:src="@drawable/marshmallow_feed"
+                android:scaleType="fitCenter"
+                android:contentDescription="@null" />
 
             <TextView
                 android:layout_width="wrap_content"
@@ -143,12 +162,29 @@
             android:background="@drawable/widget_button_blue"
             android:padding="4dp">
 
-            <TextView
+            <LinearLayout
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="💧🐄"
-                android:textSize="24sp"
-                android:gravity="center" />
+                android:orientation="horizontal"
+                android:gravity="center">
+
+                <ImageView
+                    android:background="@android:color/transparent"
+                    android:layout_width="24dp"
+                    android:layout_height="24dp"
+                    android:src="@drawable/marshmallow_pee"
+                    android:scaleType="fitCenter"
+                    android:contentDescription="@null" />
+
+                <ImageView
+                    android:background="@android:color/transparent"
+                    android:layout_width="24dp"
+                    android:layout_height="24dp"
+                    android:layout_marginStart="2dp"
+                    android:src="@drawable/marshmallow_feed"
+                    android:scaleType="fitCenter"
+                    android:contentDescription="@null" />
+            </LinearLayout>
 
             <TextView
                 android:layout_width="wrap_content"
@@ -174,12 +210,29 @@
             android:background="@drawable/widget_button_pink"
             android:padding="4dp">
 
-            <TextView
+            <LinearLayout
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="💩🐄"
-                android:textSize="24sp"
-                android:gravity="center" />
+                android:orientation="horizontal"
+                android:gravity="center">
+
+                <ImageView
+                    android:background="@android:color/transparent"
+                    android:layout_width="24dp"
+                    android:layout_height="24dp"
+                    android:src="@drawable/marshmallow_poop"
+                    android:scaleType="fitCenter"
+                    android:contentDescription="@null" />
+
+                <ImageView
+                    android:background="@android:color/transparent"
+                    android:layout_width="24dp"
+                    android:layout_height="24dp"
+                    android:layout_marginStart="2dp"
+                    android:src="@drawable/marshmallow_feed"
+                    android:scaleType="fitCenter"
+                    android:contentDescription="@null" />
+            </LinearLayout>
 
             <TextView
                 android:layout_width="wrap_content"

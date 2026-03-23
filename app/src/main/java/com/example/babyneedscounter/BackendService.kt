@@ -8,12 +8,25 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import org.json.JSONArray
 import org.json.JSONObject
 import java.text.SimpleDateFormat
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.TimeUnit
+
+/**
+ * Google Sheet column B markers for sleep (emoji-only for new rows).
+ * [SLEEP_STARTED]=😴 fell asleep; [SLEEP_ENDED]=☀️ woke up — distinct from 🐄 💩 💧.
+ */
+object SheetEventMarkers {
+    const val SLEEP_STARTED = "😴"
+    const val SLEEP_ENDED = "☀️"
+}
 
 class BackendService(private val context: Context) {
     
@@ -27,7 +40,8 @@ class BackendService(private val context: Context) {
     
     data class BabyEvent(
         val timestamp: String,
-        val type: String, // "poop_pee", "pee", "feed"
+        /** Sheet column B: emoji markers (e.g. 🐄 💧 😴 ☀️). */
+        val type: String,
         val notes: String = ""
     )
     
@@ -38,10 +52,15 @@ class BackendService(private val context: Context) {
         val notes: String
     )
     
-    suspend fun logEvent(googleSheetUrl: String, event: BabyEvent): Boolean {
+    data class LogEventResult(
+        val success: Boolean,
+        val rowNumber: Int? = null
+    )
+    
+    suspend fun logEvent(googleSheetUrl: String, event: BabyEvent): LogEventResult {
         if (googleSheetUrl.isEmpty()) {
             Log.e("BackendService", "Google Sheet URL not configured")
-            return false
+            return LogEventResult(success = false)
         }
         
         return withContext(Dispatchers.IO) {
@@ -72,8 +91,21 @@ class BackendService(private val context: Context) {
                 val success = response.isSuccessful
                 val responseBody = response.body?.string() ?: ""
                 
+                val rowNumber: Int? = if (success && responseBody.isNotEmpty()) {
+                    try {
+                        val respJson = JSONObject(responseBody)
+                        if (respJson.optString("status") == "success" && respJson.has("rowNumber") && !respJson.isNull("rowNumber")) {
+                            val n = respJson.getInt("rowNumber")
+                            if (n > 0) n else null
+                        } else null
+                    } catch (e: Exception) {
+                        Log.w("BackendService", "Could not parse rowNumber from log response", e)
+                        null
+                    }
+                } else null
+                
                 if (success) {
-                    Log.d("BackendService", "Successfully logged event: ${event.type}")
+                    Log.d("BackendService", "Successfully logged event: ${event.type}, rowNumber=$rowNumber")
                     Log.d("BackendService", "Response: $responseBody")
                 } else {
                     Log.e("BackendService", "Failed to log event. Status code: ${response.code}")
@@ -82,12 +114,12 @@ class BackendService(private val context: Context) {
                 }
                 
                 response.close()
-                success
+                LogEventResult(success = success, rowNumber = rowNumber)
             } catch (e: Exception) {
                 Log.e("BackendService", "Error logging event: ${e.javaClass.simpleName}")
                 Log.e("BackendService", "Error message: ${e.message}")
                 e.printStackTrace()
-                false
+                LogEventResult(success = false)
             }
         }
     }
@@ -100,21 +132,12 @@ class BackendService(private val context: Context) {
         return withContext(Dispatchers.IO) {
             try {
                 val webAppUrl = convertToWebAppUrl(googleSheetUrl)
-                
-                // Calculate 7 AM to 7 AM window (baby day)
-                val calendar = java.util.Calendar.getInstance()
-                val currentHour = calendar.get(java.util.Calendar.HOUR_OF_DAY)
-                
-                // If it's before 7 AM, use yesterday at 7 AM as the start time
-                if (currentHour < 7) {
-                    calendar.add(java.util.Calendar.DAY_OF_MONTH, -1)
-                }
-                calendar.set(java.util.Calendar.HOUR_OF_DAY, 7)
-                calendar.set(java.util.Calendar.MINUTE, 0)
-                calendar.set(java.util.Calendar.SECOND, 0)
-                calendar.set(java.util.Calendar.MILLISECOND, 0)
-                
-                val startTime = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).format(calendar.time)
+
+                val zone = ZoneId.systemDefault()
+                val startTime = BabyDay.formatSheetStartTime(
+                    BabyDay.babyDayStartContaining(System.currentTimeMillis(), zone),
+                    zone
+                )
                 val urlWithParams = "$webAppUrl?startTime=$startTime"
                 
                 val request = Request.Builder()
@@ -141,10 +164,46 @@ class BackendService(private val context: Context) {
                         null
                     }
                     
+                    val lastSleepEventType = if (jsonResponse.has("lastSleepEventType") && !jsonResponse.isNull("lastSleepEventType")) {
+                        jsonResponse.getString("lastSleepEventType")
+                    } else {
+                        null
+                    }
+                    
+                    val lastSleepEventTimeISO = if (jsonResponse.has("lastSleepEventTimeISO") && !jsonResponse.isNull("lastSleepEventTimeISO")) {
+                        jsonResponse.getString("lastSleepEventTimeISO")
+                    } else {
+                        null
+                    }
+                    
+                    val lastPeeTimeISO = if (jsonResponse.has("lastPeeTimeISO") && !jsonResponse.isNull("lastPeeTimeISO")) {
+                        jsonResponse.getString("lastPeeTimeISO")
+                    } else {
+                        null
+                    }
+                    val lastPoopTimeISO = if (jsonResponse.has("lastPoopTimeISO") && !jsonResponse.isNull("lastPoopTimeISO")) {
+                        jsonResponse.getString("lastPoopTimeISO")
+                    } else {
+                        null
+                    }
+
+                    val previousWakeWindowLabel =
+                        if (jsonResponse.has("previousWakeWindowLabel") && !jsonResponse.isNull("previousWakeWindowLabel")) {
+                            jsonResponse.getString("previousWakeWindowLabel").takeIf { it.isNotBlank() }
+                        } else {
+                            null
+                        }
+
                     val stats = TodayStats(
                         peeCount = jsonResponse.optInt("peeCount", 0),
                         poopCount = jsonResponse.optInt("poopCount", 0),
-                        lastFeedTimeISO = lastFeedTimeISO
+                        feedCount = jsonResponse.optInt("feedCount", 0),
+                        lastFeedTimeISO = lastFeedTimeISO,
+                        lastPeeTimeISO = lastPeeTimeISO,
+                        lastPoopTimeISO = lastPoopTimeISO,
+                        lastSleepEventType = lastSleepEventType,
+                        lastSleepEventTimeISO = lastSleepEventTimeISO,
+                        previousWakeWindowLabel = previousWakeWindowLabel
                     )
                     
                     Log.d("BackendService", "Parsed stats: pee=${stats.peeCount}, poop=${stats.poopCount}, feed=${stats.getTimeSinceLastFeed()}, feedTimeISO=${stats.lastFeedTimeISO}")
@@ -203,8 +262,130 @@ class BackendService(private val context: Context) {
     data class TodayStats(
         val peeCount: Int,
         val poopCount: Int,
-        val lastFeedTimeISO: String?
+        /** Feeds logged in the current baby day (🐄), from stats API. */
+        val feedCount: Int = 0,
+        val lastFeedTimeISO: String?,
+        /** Most recent pee-related row today (column A as ISO). */
+        val lastPeeTimeISO: String? = null,
+        /** Most recent poop-related row today (column A as ISO). */
+        val lastPoopTimeISO: String? = null,
+        /** Raw column B value from stats: 😴 / ☀️ for new rows, or legacy sleep_started / sleep_ended. */
+        val lastSleepEventType: String? = null,
+        val lastSleepEventTimeISO: String? = null,
+        /** Last completed wake window in baby day (☀️→😴), e.g. "1h 25m"; for UI when currently awake. */
+        val previousWakeWindowLabel: String? = null
     ) {
+        private fun isSleepStartMarker(): Boolean =
+            lastSleepEventType == SheetEventMarkers.SLEEP_STARTED || lastSleepEventType == "sleep_started"
+        
+        private fun isSleepEndMarker(): Boolean =
+            lastSleepEventType == SheetEventMarkers.SLEEP_ENDED || lastSleepEventType == "sleep_ended"
+        
+        fun isSleeping(): Boolean = isSleepStartMarker()
+        
+        /** Latest sleep-related row is a wake event (baby awake since then). */
+        fun isAwakeFromLastSleepEvent(): Boolean = isSleepEndMarker()
+        
+        fun formatSleepStartClock(): String {
+            if (lastSleepEventTimeISO == null || !isSleeping()) return "—"
+            return formatIsoToClock(lastSleepEventTimeISO)
+        }
+        
+        fun formatLastSleepEndedClock(): String {
+            if (lastSleepEventTimeISO == null || !isSleepEndMarker()) return "—"
+            return formatIsoToClock(lastSleepEventTimeISO)
+        }
+        
+        /** Duration since fell asleep (😴 / sleep_started). */
+        fun getSleepDurationLabel(): String {
+            if (!isSleeping() || lastSleepEventTimeISO == null) return "—"
+            return try {
+                val start = parseIsoToDate(lastSleepEventTimeISO) ?: return "—"
+                val diffMs = Date().time - start.time
+                val diffMinutes = (diffMs / 60000).toInt().coerceAtLeast(0)
+                val hours = diffMinutes / 60
+                val minutes = diffMinutes % 60
+                when {
+                    hours > 0 -> "${hours}h ${minutes}m"
+                    else -> "${minutes}m"
+                }
+            } catch (e: Exception) {
+                "—"
+            }
+        }
+        
+        /** Time awake since last wake (☀️ / sleep_ended). */
+        fun getAwakeDurationLabel(): String {
+            if (!isSleepEndMarker() || lastSleepEventTimeISO == null) return "—"
+            return try {
+                val wakeTime = parseIsoToDate(lastSleepEventTimeISO) ?: return "—"
+                val diffMs = Date().time - wakeTime.time
+                val diffMinutes = (diffMs / 60000).toInt().coerceAtLeast(0)
+                val hours = diffMinutes / 60
+                val minutes = diffMinutes % 60
+                when {
+                    hours > 0 -> "${hours}h ${minutes}m"
+                    else -> "${minutes}m"
+                }
+            } catch (e: Exception) {
+                "—"
+            }
+        }
+        
+        private fun formatIsoToClock(iso: String): String {
+            return try {
+                val d = parseIsoToDate(iso) ?: return "—"
+                SimpleDateFormat("HH:mm", Locale.US).format(d)
+            } catch (e: Exception) {
+                "—"
+            }
+        }
+
+        /** Clock time (local) for last pee event today, or "—". */
+        fun getLastPeeClock(): String {
+            if (lastPeeTimeISO == null) return "—"
+            return formatIsoToClock(lastPeeTimeISO)
+        }
+
+        /** Clock time (local) for last poop event today, or "—". */
+        fun getLastPoopClock(): String {
+            if (lastPoopTimeISO == null) return "—"
+            return formatIsoToClock(lastPoopTimeISO)
+        }
+
+        /** Relative time since last pee today (e.g. "1h 20m", "just now"), or "—". */
+        fun getLastPeeAgo(): String = relativeAgoFromIso(lastPeeTimeISO)
+
+        /** Relative time since last poop today, or "—". */
+        fun getLastPoopAgo(): String = relativeAgoFromIso(lastPoopTimeISO)
+
+        private fun relativeAgoFromIso(iso: String?): String {
+            if (iso == null) return "—"
+            return try {
+                val t = parseIsoToDate(iso) ?: return "—"
+                val diffMs = Date().time - t.time
+                val diffMinutes = (diffMs / 60000).toInt().coerceAtLeast(0)
+                val hours = diffMinutes / 60
+                val minutes = diffMinutes % 60
+                when {
+                    hours > 0 -> "${hours}h ${minutes}m"
+                    minutes > 0 -> "${minutes}m"
+                    else -> "just now"
+                }
+            } catch (e: Exception) {
+                "—"
+            }
+        }
+        
+        private fun parseIsoToDate(iso: String): Date? {
+            return try {
+                SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply {
+                    timeZone = java.util.TimeZone.getTimeZone("UTC")
+                }.parse(iso)
+            } catch (e: Exception) {
+                null
+            }
+        }
         fun getTimeSinceLastFeed(): String {
             if (lastFeedTimeISO == null) return "—"
             
@@ -299,37 +480,39 @@ class BackendService(private val context: Context) {
         }
     }
     
-    suspend fun fetchTodayEvents(googleSheetUrl: String): List<EventItem>? {
+    /**
+     * Fetches events for Insights: **7am–7am baby days** — from four baby days before the current one’s start
+     * through the end of the **current** baby day (next 7am exclusive), so Today/Yesterday and prior-day comparisons have data.
+     */
+    suspend fun fetchInsightsEvents(googleSheetUrl: String): List<EventItem>? {
         if (googleSheetUrl.isEmpty()) {
             return null
         }
-        
+
         return withContext(Dispatchers.IO) {
             try {
                 val webAppUrl = convertToWebAppUrl(googleSheetUrl)
-                
-                // Calculate 7 AM to 7 AM window (baby day)
-                val calendar = java.util.Calendar.getInstance()
-                val currentHour = calendar.get(java.util.Calendar.HOUR_OF_DAY)
-                
-                // If it's before 7 AM, use yesterday at 7 AM as the start time
-                if (currentHour < 7) {
-                    calendar.add(java.util.Calendar.DAY_OF_MONTH, -1)
-                }
-                calendar.set(java.util.Calendar.HOUR_OF_DAY, 7)
-                calendar.set(java.util.Calendar.MINUTE, 0)
-                calendar.set(java.util.Calendar.SECOND, 0)
-                calendar.set(java.util.Calendar.MILLISECOND, 0)
-                
-                val startTime = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).format(calendar.time)
-                val urlWithParams = "$webAppUrl?action=getEvents&startTime=$startTime"
-                
+                val zone = ZoneId.systemDefault()
+                val now = System.currentTimeMillis()
+                val currentBabyDayStart = BabyDay.babyDayStartContaining(now, zone)
+                val startFetch = BabyDay.offsetBabyDayStartMs(currentBabyDayStart, zone, -4)
+                val endExclusive = BabyDay.nextBabyDayStartMs(currentBabyDayStart, zone)
+                val startTime = DateTimeFormatter.ISO_INSTANT.format(Instant.ofEpochMilli(startFetch))
+                val endTime = DateTimeFormatter.ISO_INSTANT.format(Instant.ofEpochMilli(endExclusive))
+
+                val base = webAppUrl.toHttpUrlOrNull() ?: return@withContext null
+                val url = base.newBuilder()
+                    .addQueryParameter("action", "getEvents")
+                    .addQueryParameter("startTime", startTime)
+                    .addQueryParameter("endTime", endTime)
+                    .build()
+
                 val request = Request.Builder()
-                    .url(urlWithParams)
+                    .url(url)
                     .get()
                     .build()
-                
-                Log.d("BackendService", "Fetching events from: $urlWithParams")
+
+                Log.d("BackendService", "Fetching insights events from: $url")
                 val response = client.newCall(request).execute()
                 
                 if (response.isSuccessful) {

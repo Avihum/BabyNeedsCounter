@@ -22,7 +22,10 @@ class StatsCache(private val context: Context) {
     companion object {
         private val PEE_COUNT_KEY = intPreferencesKey("cached_pee_count")
         private val POOP_COUNT_KEY = intPreferencesKey("cached_poop_count")
+        private val FEED_COUNT_KEY = intPreferencesKey("cached_feed_count")
         private val LAST_FEED_TIME_ISO_KEY = stringPreferencesKey("cached_last_feed_time_iso")
+        private val LAST_PEE_TIME_ISO_KEY = stringPreferencesKey("cached_last_pee_time_iso")
+        private val LAST_POOP_TIME_ISO_KEY = stringPreferencesKey("cached_last_poop_time_iso")
         private val CACHE_TIMESTAMP_KEY = longPreferencesKey("cache_timestamp")
         
         // Cache is valid for 5 minutes
@@ -37,8 +40,19 @@ class StatsCache(private val context: Context) {
             context.statsCacheDataStore.edit { preferences ->
                 preferences[PEE_COUNT_KEY] = stats.peeCount
                 preferences[POOP_COUNT_KEY] = stats.poopCount
+                preferences[FEED_COUNT_KEY] = stats.feedCount
                 stats.lastFeedTimeISO?.let {
                     preferences[LAST_FEED_TIME_ISO_KEY] = it
+                }
+                if (stats.lastPeeTimeISO != null) {
+                    preferences[LAST_PEE_TIME_ISO_KEY] = stats.lastPeeTimeISO
+                } else {
+                    preferences.remove(LAST_PEE_TIME_ISO_KEY)
+                }
+                if (stats.lastPoopTimeISO != null) {
+                    preferences[LAST_POOP_TIME_ISO_KEY] = stats.lastPoopTimeISO
+                } else {
+                    preferences.remove(LAST_POOP_TIME_ISO_KEY)
                 }
                 preferences[CACHE_TIMESTAMP_KEY] = System.currentTimeMillis()
             }
@@ -58,7 +72,10 @@ class StatsCache(private val context: Context) {
             val cacheTimestamp = preferences[CACHE_TIMESTAMP_KEY] ?: 0L
             val peeCount = preferences[PEE_COUNT_KEY]
             val poopCount = preferences[POOP_COUNT_KEY]
+            val feedCount = preferences[FEED_COUNT_KEY]
             val lastFeedTimeISO = preferences[LAST_FEED_TIME_ISO_KEY]
+            val lastPeeTimeISO = preferences[LAST_PEE_TIME_ISO_KEY]
+            val lastPoopTimeISO = preferences[LAST_POOP_TIME_ISO_KEY]
             
             // Return cached data even if "expired" - we just want to show something
             // The app will refresh in background
@@ -68,7 +85,13 @@ class StatsCache(private val context: Context) {
                 BackendService.TodayStats(
                     peeCount = peeCount,
                     poopCount = poopCount,
-                    lastFeedTimeISO = lastFeedTimeISO
+                    feedCount = feedCount ?: 0,
+                    lastFeedTimeISO = lastFeedTimeISO,
+                    lastPeeTimeISO = lastPeeTimeISO,
+                    lastPoopTimeISO = lastPoopTimeISO,
+                    lastSleepEventType = null,
+                    lastSleepEventTimeISO = null,
+                    previousWakeWindowLabel = null
                 )
             } else {
                 Log.d("StatsCache", "No cached stats available")

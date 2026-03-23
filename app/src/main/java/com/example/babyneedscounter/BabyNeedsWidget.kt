@@ -204,7 +204,7 @@ class BabyNeedsWidget : AppWidgetProvider() {
                         type = eventType,
                         notes = ""
                     )
-                    val success = backendService.logEvent(googleSheetUrl, event)
+                    val success = backendService.logEvent(googleSheetUrl, event).success
                     
                     // Refresh stats on main thread
                     Handler(Looper.getMainLooper()).post {

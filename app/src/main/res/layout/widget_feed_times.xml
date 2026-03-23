@@ -19,12 +19,13 @@
         android:background="@drawable/widget_stat_card"
         android:padding="3dp">
 
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="⏱"
-            android:textSize="18sp"
-            android:gravity="center" />
+        <ImageView
+            android:background="@android:color/transparent"
+            android:layout_width="22dp"
+            android:layout_height="22dp"
+            android:src="@drawable/marshmallow_feed"
+            android:scaleType="fitCenter"
+            android:contentDescription="@null" />
 
         <TextView
             android:id="@+id/widget_feed_previous_time"
@@ -49,13 +50,13 @@
         android:background="@drawable/widget_stat_card"
         android:padding="3dp">
 
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="~"
-            android:textColor="#AAAAAA"
-            android:textSize="14sp"
-            android:gravity="center" />
+        <ImageView
+            android:background="@android:color/transparent"
+            android:layout_width="22dp"
+            android:layout_height="22dp"
+            android:src="@drawable/marshmallow_feed"
+            android:scaleType="fitCenter"
+            android:contentDescription="@null" />
 
         <TextView
             android:id="@+id/widget_feed_next_time"

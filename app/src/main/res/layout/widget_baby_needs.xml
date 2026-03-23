@@ -25,12 +25,13 @@
             android:layout_marginEnd="2dp"
             android:padding="4dp">
 
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="💧"
-                android:textSize="20sp"
-                android:gravity="center" />
+            <ImageView
+                android:background="@android:color/transparent"
+                android:layout_width="24dp"
+                android:layout_height="24dp"
+                android:src="@drawable/marshmallow_pee"
+                android:scaleType="fitCenter"
+                android:contentDescription="@null" />
 
             <TextView
                 android:id="@+id/widget_pee_count"
@@ -66,12 +67,13 @@
             android:layout_marginEnd="2dp"
             android:padding="4dp">
 
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="💩"
-                android:textSize="20sp"
-                android:gravity="center" />
+            <ImageView
+                android:background="@android:color/transparent"
+                android:layout_width="24dp"
+                android:layout_height="24dp"
+                android:src="@drawable/marshmallow_poop"
+                android:scaleType="fitCenter"
+                android:contentDescription="@null" />
 
             <TextView
                 android:id="@+id/widget_poop_count"
@@ -106,12 +108,13 @@
             android:layout_marginStart="2dp"
             android:padding="4dp">
 
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="🐄"
-                android:textSize="20sp"
-                android:gravity="center" />
+            <ImageView
+                android:background="@android:color/transparent"
+                android:layout_width="24dp"
+                android:layout_height="24dp"
+                android:src="@drawable/marshmallow_feed"
+                android:scaleType="fitCenter"
+                android:contentDescription="@null" />
 
             <TextView
                 android:id="@+id/widget_feed_time"
@@ -144,7 +147,7 @@
         android:orientation="horizontal"
         android:layout_marginTop="2dp">
 
-        <!-- Poop & Pee Button -->
+        <!-- Poop (combo action; same label as before) -->
         <LinearLayout
             android:id="@+id/widget_btn_poop_pee"
             android:layout_width="0dp"
@@ -156,12 +159,13 @@
             android:background="@drawable/widget_button_yellow"
             android:padding="6dp">
 
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="💩"
-                android:textSize="28sp"
-                android:gravity="center" />
+            <ImageView
+                android:background="@android:color/transparent"
+                android:layout_width="30dp"
+                android:layout_height="30dp"
+                android:src="@drawable/marshmallow_poop"
+                android:scaleType="fitCenter"
+                android:contentDescription="@null" />
 
             <TextView
                 android:layout_width="wrap_content"
@@ -188,12 +192,13 @@
             android:background="@drawable/widget_button_blue"
             android:padding="6dp">
 
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="💧"
-                android:textSize="28sp"
-                android:gravity="center" />
+            <ImageView
+                android:background="@android:color/transparent"
+                android:layout_width="30dp"
+                android:layout_height="30dp"
+                android:src="@drawable/marshmallow_pee"
+                android:scaleType="fitCenter"
+                android:contentDescription="@null" />
 
             <TextView
                 android:layout_width="wrap_content"
@@ -219,12 +224,13 @@
             android:background="@drawable/widget_button_pink"
             android:padding="6dp">
 
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="🐄"
-                android:textSize="28sp"
-                android:gravity="center" />
+            <ImageView
+                android:background="@android:color/transparent"
+                android:layout_width="30dp"
+                android:layout_height="30dp"
+                android:src="@drawable/marshmallow_feed"
+                android:scaleType="fitCenter"
+                android:contentDescription="@null" />
 
             <TextView
                 android:layout_width="wrap_content"
@@ -259,12 +265,29 @@
             android:background="@drawable/widget_button_blue"
             android:padding="6dp">
 
-            <TextView
+            <LinearLayout
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="💧🐄"
-                android:textSize="24sp"
-                android:gravity="center" />
+                android:orientation="horizontal"
+                android:gravity="center">
+
+                <ImageView
+                    android:background="@android:color/transparent"
+                    android:layout_width="26dp"
+                    android:layout_height="26dp"
+                    android:src="@drawable/marshmallow_pee"
+                    android:scaleType="fitCenter"
+                    android:contentDescription="@null" />
+
+                <ImageView
+                    android:background="@android:color/transparent"
+                    android:layout_width="26dp"
+                    android:layout_height="26dp"
+                    android:layout_marginStart="2dp"
+                    android:src="@drawable/marshmallow_feed"
+                    android:scaleType="fitCenter"
+                    android:contentDescription="@null" />
+            </LinearLayout>
 
             <TextView
                 android:layout_width="wrap_content"
@@ -290,12 +313,29 @@
             android:background="@drawable/widget_button_pink"
             android:padding="6dp">
 
-            <TextView
+            <LinearLayout
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="💩🐄"
-                android:textSize="24sp"
-                android:gravity="center" />
+                android:orientation="horizontal"
+                android:gravity="center">
+
+                <ImageView
+                    android:background="@android:color/transparent"
+                    android:layout_width="26dp"
+                    android:layout_height="26dp"
+                    android:src="@drawable/marshmallow_poop"
+                    android:scaleType="fitCenter"
+                    android:contentDescription="@null" />
+
+                <ImageView
+                    android:background="@android:color/transparent"
+                    android:layout_width="26dp"
+                    android:layout_height="26dp"
+                    android:layout_marginStart="2dp"
+                    android:src="@drawable/marshmallow_feed"
+                    android:scaleType="fitCenter"
+                    android:contentDescription="@null" />
+            </LinearLayout>
 
             <TextView
                 android:layout_width="wrap_content"

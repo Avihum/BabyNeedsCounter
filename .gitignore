@@ -84,6 +84,9 @@ lint/tmp/
 # Android Profiling
 *.hprof
 
+# Local Python venv (icon generation script)
+.venv/
+
 # Mac
 .DS_Store
 

@@ -71,7 +71,8 @@ function doPost(e) {
       
       return ContentService.createTextOutput(JSON.stringify({
         'status': 'success',
-        'message': 'Event logged successfully at row 2 (first event)'
+        'message': 'Event logged successfully at row 2 (first event)',
+        'rowNumber': 2
       }))
       .setMimeType(ContentService.MimeType.JSON);
     }
@@ -139,7 +140,8 @@ function doPost(e) {
     // Return success response
     return ContentService.createTextOutput(JSON.stringify({
       'status': 'success',
-      'message': 'Event logged successfully at row ' + insertPosition + ' (chronologically sorted)'
+      'message': 'Event logged successfully at row ' + insertPosition + ' (chronologically sorted)',
+      'rowNumber': insertPosition
     }))
     .setMimeType(ContentService.MimeType.JSON);
     
@@ -186,8 +188,10 @@ function doGet(e) {
 
 function getDetailedEvents(sheet, data, e) {
   const startTimeParam = e.parameter.startTime;
+  const endTimeParam = e.parameter.endTime;
   
   Logger.log('GetDetailedEvents - StartTime parameter: ' + startTimeParam);
+  Logger.log('GetDetailedEvents - EndTime parameter: ' + endTimeParam);
   Logger.log('Total rows in sheet: ' + data.length);
   
   let events = [];
@@ -214,6 +218,12 @@ function getDetailedEvents(sheet, data, e) {
     if (startTimeParam) {
       const startTime = new Date(startTimeParam);
       if (eventTime < startTime) continue;
+    }
+    
+    // Filter by endTime if provided (exclusive upper bound)
+    if (endTimeParam) {
+      const endTime = new Date(endTimeParam);
+      if (eventTime >= endTime) continue;
     }
     
     // Add event with row number (i + 1 because sheets are 1-indexed)
@@ -290,9 +300,46 @@ function getStats(sheet, data, e) {
     const type = row[1];
     return type && type.includes('💩');
   }).length;
+
+  const feedCount = todayEvents.filter(row => {
+    const type = row[1];
+    return type && String(type).includes('🐄');
+  }).length;
+
+  function cellToIso(cell) {
+    if (!cell) return null;
+    if (cell instanceof Date) {
+      return cell.toISOString();
+    }
+    const parsed = new Date(cell);
+    if (!isNaN(parsed.getTime())) {
+      return parsed.toISOString();
+    }
+    return null;
+  }
+
+  // todayEvents is newest-first: first matching row is most recent today
+  let lastPeeTimeISO = null;
+  let lastPoopTimeISO = null;
+  for (let i = 0; i < todayEvents.length; i++) {
+    const row = todayEvents[i];
+    if (!row[0] || !row[1]) continue;
+    const type = String(row[1]);
+    if (lastPeeTimeISO === null && type.includes('💧')) {
+      lastPeeTimeISO = cellToIso(row[0]);
+    }
+    if (lastPoopTimeISO === null && type.includes('💩')) {
+      lastPoopTimeISO = cellToIso(row[0]);
+    }
+    if (lastPeeTimeISO && lastPoopTimeISO) break;
+  }
   
   // Find last feeding event (any event containing 🐄)
-  const feedEvents = todayEvents.filter(row => {
+  // IMPORTANT: Look at ALL events (not just today) because next feed time
+  // is independent of the 7am-7am baby day logic
+  const allEvents = data.slice(1); // Skip header row
+  const feedEvents = allEvents.filter(row => {
+    if (!row[0]) return false;
     const type = row[1];
     return type && type.includes('🐄');
   });
@@ -312,10 +359,88 @@ function getStats(sheet, data, e) {
     }
   }
   
+  // Latest sleep event (sheet order: newest first — same as allEvents[0])
+  // Column B: 😴 = fell asleep, ☀️ = woke up (emoji-only). Legacy text rows still supported.
+  const SHEET_SLEEP_STARTED = '😴';
+  const SHEET_SLEEP_ENDED = '☀️';
+  let lastSleepEventType = null;
+  let lastSleepEventTimeISO = null;
+  for (let i = 0; i < allEvents.length; i++) {
+    const row = allEvents[i];
+    if (!row[0]) continue;
+    const type = row[1];
+    if (type === SHEET_SLEEP_STARTED || type === SHEET_SLEEP_ENDED ||
+        type === 'sleep_started' || type === 'sleep_ended') {
+      lastSleepEventType = type;
+      const t = row[0];
+      let eventTime;
+      if (t instanceof Date) {
+        eventTime = t;
+      } else {
+        eventTime = new Date(t);
+      }
+      if (!isNaN(eventTime.getTime())) {
+        lastSleepEventTimeISO = eventTime.toISOString();
+      }
+      break;
+    }
+  }
+
+  /** Completed wake windows in baby day: ☀️ (woke) → 😴 (fell asleep). Last one is "previous" when baby is awake now. */
+  function formatDurationMs(ms) {
+    const m = Math.floor(ms / 60000);
+    if (m < 60) return m + 'm';
+    const h = Math.floor(m / 60);
+    const mm = m % 60;
+    return mm > 0 ? (h + 'h ' + mm + 'm') : (h + 'h');
+  }
+
+  function isWakeMarker(type) {
+    return type === SHEET_SLEEP_ENDED || type === 'sleep_ended';
+  }
+  function isSleepMarker(type) {
+    return type === SHEET_SLEEP_STARTED || type === 'sleep_started';
+  }
+
+  let previousWakeWindowLabel = null;
+  const sleepMarkers = [];
+  for (let i = 0; i < todayEvents.length; i++) {
+    const row = todayEvents[i];
+    if (!row[0] || !row[1]) continue;
+    const type = String(row[1]);
+    if (!isWakeMarker(type) && !isSleepMarker(type)) continue;
+    let eventTime;
+    const ts = row[0];
+    if (ts instanceof Date) {
+      eventTime = ts;
+    } else {
+      eventTime = new Date(ts);
+    }
+    if (isNaN(eventTime.getTime())) continue;
+    sleepMarkers.push({ t: eventTime.getTime(), type: type });
+  }
+  sleepMarkers.sort(function (a, b) { return a.t - b.t; });
+  const completedWakeMs = [];
+  for (let i = 0; i < sleepMarkers.length - 1; i++) {
+    if (isWakeMarker(sleepMarkers[i].type) && isSleepMarker(sleepMarkers[i + 1].type)) {
+      const dur = sleepMarkers[i + 1].t - sleepMarkers[i].t;
+      if (dur > 0) completedWakeMs.push(dur);
+    }
+  }
+  if (sleepMarkers.length > 0 && isWakeMarker(sleepMarkers[sleepMarkers.length - 1].type) && completedWakeMs.length > 0) {
+    previousWakeWindowLabel = formatDurationMs(completedWakeMs[completedWakeMs.length - 1]);
+  }
+  
   const stats = {
     peeCount: peeCount,
     poopCount: poopCount,
+    feedCount: feedCount,
+    previousWakeWindowLabel: previousWakeWindowLabel,
+    lastPeeTimeISO: lastPeeTimeISO,
+    lastPoopTimeISO: lastPoopTimeISO,
     lastFeedTimeISO: lastFeedTimeISO,
+    lastSleepEventType: lastSleepEventType,
+    lastSleepEventTimeISO: lastSleepEventTimeISO,
     // Debug info
     debug: {
       startTime: startTimeParam,
