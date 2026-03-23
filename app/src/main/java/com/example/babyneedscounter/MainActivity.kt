@@ -174,6 +174,16 @@ private fun formatLastFeedSecondaryLine(lastAgo: String): String = when {
     else -> "Last: $lastAgo ago"
 }
 
+/** Compact Feeding card metadata: keep it short so the ETA stays visible on narrow phones. */
+private fun formatCompactFeedMetaLine(lastAgo: String, todayFeedCount: Int): String {
+    val last = when {
+        lastAgo == "—" -> "Last —"
+        lastAgo.equals("just now", ignoreCase = true) -> "Last just now"
+        else -> "Last $lastAgo ago"
+    }
+    return "$last · Today $todayFeedCount"
+}
+
 /** Sheet emoji (column B) + short UI label for dialogs — never use legacy text for new logs. */
 private fun nextSleepEvent(isSleeping: Boolean): Pair<String, String> =
     if (isSleeping) SheetEventMarkers.SLEEP_ENDED to "wake-up"
@@ -1077,13 +1087,18 @@ private fun QuickLogCardLayout(
     val padTop = if (compactList) CompactCardPaddingVertical else 12.dp
     val padBottom = if (compactList) CompactCardPaddingVertical else 12.dp
     val iconSize = if (compactList) QuickLogIconSizeCompact else QuickLogIconSize
-    val iconColumnWidth = if (compactList) 102.dp else (QuickLogIconSize + 8.dp)
+    val compactFeedLayout = compactList && bodyStyle is HomeCardBodyStyle.Feeding
+    val iconColumnWidth = when {
+        compactFeedLayout -> 94.dp
+        compactList -> 102.dp
+        else -> QuickLogIconSize + 8.dp
+    }
     val emojiSp = if (compactList) 46.sp else 40.sp
     val titleSp = if (compactList) 13.sp else 18.sp
     val titleLineH = if (compactList) 14.sp else 20.sp
-    val gapIconToText = if (compactList) 10.dp else 14.dp
-    val feedPrimary = if (compactList) 28.sp else 20.sp
-    val feedPrimaryLineH = if (compactList) 30.sp else 24.sp
+    val gapIconToText = if (compactFeedLayout) 8.dp else if (compactList) 10.dp else 14.dp
+    val feedPrimary = if (compactList) 30.sp else 20.sp
+    val feedPrimaryLineH = if (compactList) 32.sp else 24.sp
     val feedSecondary = if (compactList) 12.sp else 13.sp
     val feedSecondaryLineH = if (compactList) 13.sp else 15.sp
     val sleepStateSp = if (compactList) 12.sp else 16.sp
@@ -1094,7 +1109,7 @@ private fun QuickLogCardLayout(
     val diaperLineH = if (compactList) 15.sp else 17.sp
     val standardSubSp = if (compactList) 14.sp else 14.sp
     val hideTitleRow = compactList && when (bodyStyle) {
-        is HomeCardBodyStyle.Feeding, is HomeCardBodyStyle.Sleep, is HomeCardBodyStyle.Diaper -> true
+        is HomeCardBodyStyle.Sleep, is HomeCardBodyStyle.Diaper -> true
         else -> false
     }
     val scale by animateFloatAsState(
@@ -1176,113 +1191,108 @@ private fun QuickLogCardLayout(
                             .padding(end = 2.dp),
                         verticalArrangement = Arrangement.Center
                     ) {
-                    if (!hideTitleRow) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = title,
-                                style = MaterialTheme.typography.titleLarge,
-                                fontSize = titleSp,
-                                lineHeight = titleLineH,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onSurface,
-                                maxLines = 1,
-                                modifier = Modifier.weight(1f)
-                            )
-                            titleTrailing?.invoke()
-                        }
-                    }
-                    when (bodyStyle) {
-                        is HomeCardBodyStyle.Feeding -> {
-                            if (hideTitleRow) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(
-                                            text = "Next in ${bodyStyle.nextIn}",
-                                            fontSize = feedPrimary,
-                                            fontWeight = FontWeight.SemiBold,
-                                            lineHeight = feedPrimaryLineH,
-                                            color = MaterialTheme.colorScheme.onSurface,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                        Text(
-                                            text = "${formatLastFeedSecondaryLine(bodyStyle.lastAgo)} · Today: ${bodyStyle.todayFeedCount} feeds",
-                                            fontSize = feedSecondary,
-                                            lineHeight = feedSecondaryLineH,
-                                            color = TextSecondary,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                    }
-                                    titleTrailing?.invoke()
-                                }
-                            } else {
+                        if (!hideTitleRow) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
                                 Text(
-                                    text = "Next in ${bodyStyle.nextIn}",
-                                    fontSize = feedPrimary,
-                                    fontWeight = FontWeight.SemiBold,
-                                    lineHeight = feedPrimaryLineH,
+                                    text = title,
+                                    style = MaterialTheme.typography.titleLarge,
+                                    fontSize = if (compactFeedLayout) 12.sp else titleSp,
+                                    lineHeight = if (compactFeedLayout) 13.sp else titleLineH,
+                                    fontWeight = if (compactFeedLayout) FontWeight.Medium else FontWeight.Bold,
+                                    color = if (compactFeedLayout) TextSecondary else MaterialTheme.colorScheme.onSurface,
+                                    maxLines = 1,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                titleTrailing?.invoke()
+                            }
+                        }
+                        when (bodyStyle) {
+                            is HomeCardBodyStyle.Feeding -> {
+                                if (compactFeedLayout) {
+                                    Text(
+                                        text = bodyStyle.nextIn,
+                                        fontSize = feedPrimary,
+                                        fontWeight = FontWeight.SemiBold,
+                                        lineHeight = feedPrimaryLineH,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        text = formatCompactFeedMetaLine(
+                                            lastAgo = bodyStyle.lastAgo,
+                                            todayFeedCount = bodyStyle.todayFeedCount
+                                        ),
+                                        fontSize = feedSecondary,
+                                        lineHeight = feedSecondaryLineH,
+                                        color = TextSecondary,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                } else {
+                                    Text(
+                                        text = "Next in ${bodyStyle.nextIn}",
+                                        fontSize = feedPrimary,
+                                        fontWeight = FontWeight.SemiBold,
+                                        lineHeight = feedPrimaryLineH,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        text = "${formatLastFeedSecondaryLine(bodyStyle.lastAgo)} · Today: ${bodyStyle.todayFeedCount} feeds",
+                                        fontSize = feedSecondary,
+                                        lineHeight = feedSecondaryLineH,
+                                        color = TextSecondary,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+                            is HomeCardBodyStyle.Sleep -> {
+                                Text(
+                                    text = bodyStyle.state,
+                                    fontSize = sleepStateSp,
+                                    fontWeight = FontWeight.Medium,
+                                    lineHeight = sleepStateLineH,
+                                    color = TextSecondary,
+                                    maxLines = 1
+                                )
+                                Text(
+                                    text = bodyStyle.duration,
+                                    fontSize = sleepDurationSp,
+                                    fontWeight = FontWeight.Bold,
+                                    lineHeight = sleepDurationLineH,
                                     color = MaterialTheme.colorScheme.onSurface,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
                                 )
+                            }
+                            is HomeCardBodyStyle.Diaper -> {
                                 Text(
-                                    text = "${formatLastFeedSecondaryLine(bodyStyle.lastAgo)} · Today: ${bodyStyle.todayFeedCount} feeds",
-                                    fontSize = feedSecondary,
-                                    lineHeight = feedSecondaryLineH,
+                                    text = bodyStyle.line,
+                                    fontSize = diaperLineSp,
+                                    fontWeight = FontWeight.Medium,
+                                    lineHeight = diaperLineH,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    maxLines = 1
+                                )
+                            }
+                            is HomeCardBodyStyle.Standard -> {
+                                Text(
+                                    text = bodyStyle.subtitle,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontSize = standardSubSp,
+                                    lineHeight = 16.sp,
                                     color = TextSecondary,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
+                                    maxLines = 3
                                 )
                             }
                         }
-                        is HomeCardBodyStyle.Sleep -> {
-                            Text(
-                                text = bodyStyle.state,
-                                fontSize = sleepStateSp,
-                                fontWeight = FontWeight.Medium,
-                                lineHeight = sleepStateLineH,
-                                color = TextSecondary,
-                                maxLines = 1
-                            )
-                            Text(
-                                text = bodyStyle.duration,
-                                fontSize = sleepDurationSp,
-                                fontWeight = FontWeight.Bold,
-                                lineHeight = sleepDurationLineH,
-                                color = MaterialTheme.colorScheme.onSurface,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                        is HomeCardBodyStyle.Diaper -> {
-                            Text(
-                                text = bodyStyle.line,
-                                fontSize = diaperLineSp,
-                                fontWeight = FontWeight.Medium,
-                                lineHeight = diaperLineH,
-                                color = MaterialTheme.colorScheme.onSurface,
-                                maxLines = 1
-                            )
-                        }
-                        is HomeCardBodyStyle.Standard -> {
-                            Text(
-                                text = bodyStyle.subtitle,
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontSize = standardSubSp,
-                                lineHeight = 16.sp,
-                                color = TextSecondary,
-                                maxLines = 3
-                            )
-                        }
                     }
-                }
                 }
                 Spacer(modifier = Modifier.width(if (compactList) 6.dp else 8.dp))
                 Box(
