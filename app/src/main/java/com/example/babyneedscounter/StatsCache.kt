@@ -5,127 +5,207 @@ import android.util.Log
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
-import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.map
+import org.json.JSONArray
+import org.json.JSONObject
 
 private val Context.statsCacheDataStore: DataStore<Preferences> by preferencesDataStore(name = "stats_cache")
 
-/**
- * Cache for storing last fetched baby stats to avoid showing "--:--" during refresh
- */
+data class CachedHomeSnapshot(
+    val sourceUrl: String,
+    val babyDayStartMs: Long,
+    val stats: BackendService.TodayStats,
+    val lastSyncedAt: Long,
+)
+
+data class CachedEventsSnapshot(
+    val sourceUrl: String,
+    val fetchStartMs: Long,
+    val fetchEndMs: Long,
+    val events: List<BackendService.EventItem>,
+    val lastSyncedAt: Long,
+)
+
+data class CachedRepositoryState(
+    val homeSnapshot: CachedHomeSnapshot? = null,
+    val eventsSnapshot: CachedEventsSnapshot? = null,
+    val lastAttemptAt: Long? = null,
+    val lastSuccessAt: Long? = null,
+)
+
 class StatsCache(private val context: Context) {
-    
+
     companion object {
-        private val PEE_COUNT_KEY = intPreferencesKey("cached_pee_count")
-        private val POOP_COUNT_KEY = intPreferencesKey("cached_poop_count")
-        private val FEED_COUNT_KEY = intPreferencesKey("cached_feed_count")
-        private val LAST_FEED_TIME_ISO_KEY = stringPreferencesKey("cached_last_feed_time_iso")
-        private val LAST_PEE_TIME_ISO_KEY = stringPreferencesKey("cached_last_pee_time_iso")
-        private val LAST_POOP_TIME_ISO_KEY = stringPreferencesKey("cached_last_poop_time_iso")
-        private val CACHE_TIMESTAMP_KEY = longPreferencesKey("cache_timestamp")
-        
-        // Cache is valid for 5 minutes
-        private const val CACHE_VALIDITY_MS = 5 * 60 * 1000L
+        private val HOME_SNAPSHOT_KEY = stringPreferencesKey("home_snapshot_json")
+        private val EVENTS_SNAPSHOT_KEY = stringPreferencesKey("events_snapshot_json")
+        private val LAST_ATTEMPT_AT_KEY = longPreferencesKey("last_attempt_at")
+        private val LAST_SUCCESS_AT_KEY = longPreferencesKey("last_success_at")
     }
-    
-    /**
-     * Save stats to cache
-     */
-    suspend fun saveStats(stats: BackendService.TodayStats) {
-        try {
-            context.statsCacheDataStore.edit { preferences ->
-                preferences[PEE_COUNT_KEY] = stats.peeCount
-                preferences[POOP_COUNT_KEY] = stats.poopCount
-                preferences[FEED_COUNT_KEY] = stats.feedCount
-                stats.lastFeedTimeISO?.let {
-                    preferences[LAST_FEED_TIME_ISO_KEY] = it
-                }
-                if (stats.lastPeeTimeISO != null) {
-                    preferences[LAST_PEE_TIME_ISO_KEY] = stats.lastPeeTimeISO
-                } else {
-                    preferences.remove(LAST_PEE_TIME_ISO_KEY)
-                }
-                if (stats.lastPoopTimeISO != null) {
-                    preferences[LAST_POOP_TIME_ISO_KEY] = stats.lastPoopTimeISO
-                } else {
-                    preferences.remove(LAST_POOP_TIME_ISO_KEY)
-                }
-                preferences[CACHE_TIMESTAMP_KEY] = System.currentTimeMillis()
-            }
-            Log.d("StatsCache", "Cached stats: pee=${stats.peeCount}, poop=${stats.poopCount}, feed=${stats.lastFeedTimeISO}")
-        } catch (e: Exception) {
-            Log.e("StatsCache", "Error saving stats to cache", e)
-        }
-    }
-    
-    /**
-     * Get cached stats if available
-     */
-    suspend fun getCachedStats(): BackendService.TodayStats? {
+
+    suspend fun loadState(sourceUrl: String): CachedRepositoryState {
         return try {
             val preferences = context.statsCacheDataStore.data.first()
-            
-            val cacheTimestamp = preferences[CACHE_TIMESTAMP_KEY] ?: 0L
-            val peeCount = preferences[PEE_COUNT_KEY]
-            val poopCount = preferences[POOP_COUNT_KEY]
-            val feedCount = preferences[FEED_COUNT_KEY]
-            val lastFeedTimeISO = preferences[LAST_FEED_TIME_ISO_KEY]
-            val lastPeeTimeISO = preferences[LAST_PEE_TIME_ISO_KEY]
-            val lastPoopTimeISO = preferences[LAST_POOP_TIME_ISO_KEY]
-            
-            // Return cached data even if "expired" - we just want to show something
-            // The app will refresh in background
-            if (peeCount != null && poopCount != null) {
-                val age = System.currentTimeMillis() - cacheTimestamp
-                Log.d("StatsCache", "Retrieved cached stats (age: ${age}ms): pee=$peeCount, poop=$poopCount")
-                BackendService.TodayStats(
-                    peeCount = peeCount,
-                    poopCount = poopCount,
-                    feedCount = feedCount ?: 0,
-                    lastFeedTimeISO = lastFeedTimeISO,
-                    lastPeeTimeISO = lastPeeTimeISO,
-                    lastPoopTimeISO = lastPoopTimeISO,
-                    lastSleepEventType = null,
-                    lastSleepEventTimeISO = null,
-                    previousWakeWindowLabel = null
-                )
-            } else {
-                Log.d("StatsCache", "No cached stats available")
-                null
-            }
+            CachedRepositoryState(
+                homeSnapshot = preferences[HOME_SNAPSHOT_KEY]
+                    ?.let(::JSONObject)
+                    ?.takeIf { it.optString("sourceUrl") == sourceUrl }
+                    ?.toCachedHomeSnapshot(),
+                eventsSnapshot = preferences[EVENTS_SNAPSHOT_KEY]
+                    ?.let(::JSONObject)
+                    ?.takeIf { it.optString("sourceUrl") == sourceUrl }
+                    ?.toCachedEventsSnapshot(),
+                lastAttemptAt = preferences[LAST_ATTEMPT_AT_KEY],
+                lastSuccessAt = preferences[LAST_SUCCESS_AT_KEY],
+            )
         } catch (e: Exception) {
-            Log.e("StatsCache", "Error reading cached stats", e)
-            null
+            Log.e("StatsCache", "Error loading cached repository state", e)
+            CachedRepositoryState()
         }
     }
-    
-    /**
-     * Check if cache has any data
-     */
-    suspend fun hasCache(): Boolean {
-        return try {
-            val preferences = context.statsCacheDataStore.data.first()
-            preferences[PEE_COUNT_KEY] != null
-        } catch (e: Exception) {
-            false
-        }
-    }
-    
-    /**
-     * Clear the cache
-     */
-    suspend fun clearCache() {
+
+    suspend fun saveState(
+        homeSnapshot: CachedHomeSnapshot?,
+        eventsSnapshot: CachedEventsSnapshot?,
+        lastAttemptAt: Long?,
+        lastSuccessAt: Long?,
+    ) {
         try {
             context.statsCacheDataStore.edit { preferences ->
-                preferences.clear()
+                if (homeSnapshot != null) {
+                    preferences[HOME_SNAPSHOT_KEY] = homeSnapshot.toJson().toString()
+                } else {
+                    preferences.remove(HOME_SNAPSHOT_KEY)
+                }
+
+                if (eventsSnapshot != null) {
+                    preferences[EVENTS_SNAPSHOT_KEY] = eventsSnapshot.toJson().toString()
+                } else {
+                    preferences.remove(EVENTS_SNAPSHOT_KEY)
+                }
+
+                if (lastAttemptAt != null) {
+                    preferences[LAST_ATTEMPT_AT_KEY] = lastAttemptAt
+                } else {
+                    preferences.remove(LAST_ATTEMPT_AT_KEY)
+                }
+
+                if (lastSuccessAt != null) {
+                    preferences[LAST_SUCCESS_AT_KEY] = lastSuccessAt
+                } else {
+                    preferences.remove(LAST_SUCCESS_AT_KEY)
+                }
             }
-            Log.d("StatsCache", "Cache cleared")
+        } catch (e: Exception) {
+            Log.e("StatsCache", "Error saving cached repository state", e)
+        }
+    }
+
+    suspend fun clear() {
+        try {
+            context.statsCacheDataStore.edit { it.clear() }
         } catch (e: Exception) {
             Log.e("StatsCache", "Error clearing cache", e)
         }
     }
+}
+
+private fun CachedHomeSnapshot.toJson(): JSONObject = JSONObject().apply {
+    put("sourceUrl", sourceUrl)
+    put("babyDayStartMs", babyDayStartMs)
+    put("lastSyncedAt", lastSyncedAt)
+    put("stats", stats.toJson())
+}
+
+private fun CachedEventsSnapshot.toJson(): JSONObject = JSONObject().apply {
+    put("sourceUrl", sourceUrl)
+    put("fetchStartMs", fetchStartMs)
+    put("fetchEndMs", fetchEndMs)
+    put("lastSyncedAt", lastSyncedAt)
+    put(
+        "events",
+        JSONArray().apply {
+            events.forEach { put(it.toJson()) }
+        }
+    )
+}
+
+private fun BackendService.TodayStats.toJson(): JSONObject = JSONObject().apply {
+    put("peeCount", peeCount)
+    put("poopCount", poopCount)
+    put("feedCount", feedCount)
+    putNullable("lastFeedTimeISO", lastFeedTimeISO)
+    putNullable("lastPeeTimeISO", lastPeeTimeISO)
+    putNullable("lastPoopTimeISO", lastPoopTimeISO)
+    putNullable("lastSleepEventType", lastSleepEventType)
+    putNullable("lastSleepEventTimeISO", lastSleepEventTimeISO)
+    putNullable("previousWakeWindowLabel", previousWakeWindowLabel)
+    putNullable("previousSleepDurationLabel", previousSleepDurationLabel)
+}
+
+private fun BackendService.EventItem.toJson(): JSONObject = JSONObject().apply {
+    put("rowNumber", rowNumber)
+    put("timestamp", timestamp)
+    put("type", type)
+    put("notes", notes)
+}
+
+private fun JSONObject.toCachedHomeSnapshot(): CachedHomeSnapshot {
+    val statsJson = getJSONObject("stats")
+    return CachedHomeSnapshot(
+        sourceUrl = getString("sourceUrl"),
+        babyDayStartMs = getLong("babyDayStartMs"),
+        stats = BackendService.TodayStats(
+            peeCount = statsJson.optInt("peeCount"),
+            poopCount = statsJson.optInt("poopCount"),
+            feedCount = statsJson.optInt("feedCount"),
+            lastFeedTimeISO = statsJson.optNullableString("lastFeedTimeISO"),
+            lastPeeTimeISO = statsJson.optNullableString("lastPeeTimeISO"),
+            lastPoopTimeISO = statsJson.optNullableString("lastPoopTimeISO"),
+            lastSleepEventType = statsJson.optNullableString("lastSleepEventType"),
+            lastSleepEventTimeISO = statsJson.optNullableString("lastSleepEventTimeISO"),
+            previousWakeWindowLabel = statsJson.optNullableString("previousWakeWindowLabel"),
+            previousSleepDurationLabel = statsJson.optNullableString("previousSleepDurationLabel"),
+        ),
+        lastSyncedAt = getLong("lastSyncedAt"),
+    )
+}
+
+private fun JSONObject.toCachedEventsSnapshot(): CachedEventsSnapshot {
+    val array = optJSONArray("events") ?: JSONArray()
+    val events = buildList {
+        for (index in 0 until array.length()) {
+            val item = array.getJSONObject(index)
+            add(
+                BackendService.EventItem(
+                    rowNumber = item.getInt("rowNumber"),
+                    timestamp = item.getString("timestamp"),
+                    type = item.getString("type"),
+                    notes = item.optString("notes", ""),
+                )
+            )
+        }
+    }
+
+    return CachedEventsSnapshot(
+        sourceUrl = getString("sourceUrl"),
+        fetchStartMs = getLong("fetchStartMs"),
+        fetchEndMs = getLong("fetchEndMs"),
+        events = events,
+        lastSyncedAt = getLong("lastSyncedAt"),
+    )
+}
+
+private fun JSONObject.putNullable(key: String, value: String?) {
+    if (value == null) {
+        put(key, JSONObject.NULL)
+    } else {
+        put(key, value)
+    }
+}
+
+private fun JSONObject.optNullableString(key: String): String? {
+    return if (!has(key) || isNull(key)) null else optString(key).takeIf { it.isNotBlank() }
 }

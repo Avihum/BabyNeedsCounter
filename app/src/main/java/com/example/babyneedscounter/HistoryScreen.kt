@@ -1,31 +1,66 @@
 package com.example.babyneedscounter
 
-import android.util.Log
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.spring
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.*
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -33,399 +68,429 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
-import com.example.babyneedscounter.ui.theme.*
-import kotlinx.coroutines.launch
+import com.example.babyneedscounter.ui.theme.CategoryFeeding
+import com.example.babyneedscounter.ui.theme.CategoryPee
+import com.example.babyneedscounter.ui.theme.CategoryPoop
+import com.example.babyneedscounter.ui.theme.CategorySleep
+import com.example.babyneedscounter.ui.theme.TextSecondary
 import java.text.SimpleDateFormat
 import java.time.ZoneId
-import java.util.*
+import java.util.Calendar
+import java.util.Date
+import java.util.Locale
+import kotlinx.coroutines.launch
 
 private enum class InsightsDay { Today, Yesterday }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun InsightsScreen(
-    onNavigateBack: () -> Unit,
+    repository: BabyRepository,
+    snackbarHostState: SnackbarHostState,
+    modifier: Modifier = Modifier,
+    onInteractionLockChanged: (Boolean) -> Unit = {},
 ) {
     val context = LocalContext.current
-    val settingsManager = remember { SettingsManager(context) }
-    val backendService = remember { BackendService(context) }
     val scope = rememberCoroutineScope()
-    val snackbarHostState = remember { SnackbarHostState() }
-    
-    val googleSheetUrl by settingsManager.googleSheetUrl.collectAsState(initial = "")
-    
-    var events by remember { mutableStateOf<List<BackendService.EventItem>>(emptyList()) }
-    var isLoading by remember { mutableStateOf(false) }
+    val uiState by repository.uiState.collectAsState()
+    val todayListState = rememberLazyListState()
+    val yesterdayListState = rememberLazyListState()
+
     var selectedEventRows by remember { mutableStateOf<Set<Int>>(emptySet()) }
     var isSelectionMode by remember { mutableStateOf(false) }
     var editingEvent by remember { mutableStateOf<BackendService.EventItem?>(null) }
-    var insightsDay by remember { mutableStateOf(InsightsDay.Today) }
+    var savedDayPage by rememberSaveable { mutableIntStateOf(0) }
+    val dayPagerState = rememberPagerState(initialPage = savedDayPage, pageCount = { InsightsDay.entries.size })
 
-    // Load events on launch (7am–7am baby-day window for Insights + comparisons)
-    LaunchedEffect(googleSheetUrl) {
-        if (googleSheetUrl.isNotEmpty()) {
-            isLoading = true
-            val fetchedEvents = backendService.fetchInsightsEvents(googleSheetUrl)
-            if (fetchedEvents != null) {
-                events = fetchedEvents
-                Log.d("HistoryScreen", "Loaded ${events.size} events")
-            } else {
-                snackbarHostState.showSnackbar("Failed to load events")
-            }
-            isLoading = false
+    LaunchedEffect(isSelectionMode, editingEvent) {
+        onInteractionLockChanged(isSelectionMode || editingEvent != null)
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            onInteractionLockChanged(false)
         }
     }
 
-    // Function to refresh events
-    val refreshEvents: () -> Unit = {
-        scope.launch {
-            isLoading = true
-            val fetchedEvents = backendService.fetchInsightsEvents(googleSheetUrl)
-            if (fetchedEvents != null) {
-                events = fetchedEvents
-                selectedEventRows = emptySet()
-                isSelectionMode = false
-            }
-            isLoading = false
+    LaunchedEffect(uiState.recentEvents) {
+        selectedEventRows = selectedEventRows.filterTo(mutableSetOf()) { row ->
+            uiState.recentEvents.any { it.rowNumber == row }
+        }
+        if (selectedEventRows.isEmpty()) {
+            isSelectionMode = false
         }
     }
-    
-    // Function to delete selected events
-    val deleteSelected: () -> Unit = {
-        scope.launch {
-            HapticFeedback.mediumImpact(context)
-            isLoading = true
-            val rowsToDelete = selectedEventRows.toList()
-            val success = backendService.deleteEvents(googleSheetUrl, rowsToDelete)
-            if (success) {
-                HapticFeedback.success(context)
-                snackbarHostState.showSnackbar("✓ Deleted ${rowsToDelete.size} event(s)")
-                refreshEvents()
-            } else {
-                HapticFeedback.error(context)
-                snackbarHostState.showSnackbar("❌ Failed to delete events")
-                isLoading = false
-            }
+
+    LaunchedEffect(dayPagerState.currentPage) {
+        savedDayPage = dayPagerState.currentPage
+        if (selectedEventRows.isNotEmpty()) {
+            selectedEventRows = emptySet()
+            isSelectionMode = false
         }
     }
-    
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = {
-                    Text(
-                        text = if (isSelectionMode) "${selectedEventRows.size} selected" else "Insights",
-                        fontWeight = FontWeight.Bold
-                    )
-                },
-                navigationIcon = {
-                    if (isSelectionMode) {
-                        IconButton(onClick = {
-                            isSelectionMode = false
-                            selectedEventRows = emptySet()
-                        }) {
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                                contentDescription = "Clear selection"
-                            )
-                        }
-                    } else {
-                        IconButton(onClick = onNavigateBack) {
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                                contentDescription = "Back"
-                            )
-                        }
-                    }
-                },
-                actions = {
-                    if (isSelectionMode && selectedEventRows.isNotEmpty()) {
-                        IconButton(onClick = deleteSelected) {
-                            Icon(
-                                imageVector = Icons.Default.Delete,
-                                contentDescription = "Delete Selected",
-                                tint = MaterialTheme.colorScheme.error
-                            )
-                        }
-                    }
-                    IconButton(onClick = refreshEvents, enabled = !isLoading) {
-                        Icon(
-                            imageVector = Icons.Default.Refresh,
-                            contentDescription = "Refresh"
-                        )
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                    titleContentColor = MaterialTheme.colorScheme.onSurface
+
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+    ) {
+        if (uiState.isRefreshing && !uiState.hasCachedContent) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(32.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
+            ) {
+                CircularProgressIndicator(modifier = Modifier.size(56.dp))
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(
+                    text = "Loading Insights…",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = TextSecondary,
                 )
-            )
-        },
-        snackbarHost = { SnackbarHost(snackbarHostState) }
-    ) { innerPadding ->
-        val zone = ZoneId.systemDefault()
-        val nowMs = System.currentTimeMillis()
-        val nowMinute = nowMs / 60_000L
-        val currentBabyDayStart = BabyDay.babyDayStartContaining(nowMs, zone)
-        val anchorBabyDayStart = when (insightsDay) {
-            InsightsDay.Today -> currentBabyDayStart
-            InsightsDay.Yesterday -> BabyDay.previousBabyDayStartMs(currentBabyDayStart, zone)
-        }
-        val compareBabyDayStart = BabyDay.previousBabyDayStartMs(anchorBabyDayStart, zone)
-        val bundle = remember(events, anchorBabyDayStart, insightsDay, nowMinute) {
-            StatsAggregation.insightBundleForBabyDay(
-                events,
-                anchorBabyDayStart,
-                zone,
-                capFeedDiaperLogAtNow = insightsDay == InsightsDay.Today
-            )
-        }
-        val compareBundle = remember(events, compareBabyDayStart) {
-            StatsAggregation.insightBundleForBabyDay(events, compareBabyDayStart, zone, capFeedDiaperLogAtNow = false)
-        }
-        val sleepAgg = bundle.sleep
-        val feedAgg = bundle.feed
-        val diaperAgg = bundle.diaper
-        val displayedEvents = remember(events, anchorBabyDayStart, currentBabyDayStart, nowMinute) {
-            StatsAggregation.eventsForBabyDay(
-                events,
-                anchorBabyDayStart,
-                zone,
-                capAtNow = anchorBabyDayStart == currentBabyDayStart
-            )
-        }
-        val vsLabel = if (insightsDay == InsightsDay.Today) "vs yesterday" else "vs prior day"
-        val sleepDelta = StatsAggregation.formatSleepDeltaMinutes(
-            sleepAgg.totalSleepMinutes,
-            compareBundle.sleep.totalSleepMinutes
-        )
-        val feedDelta = StatsAggregation.formatCountDelta(feedAgg.feedCount, compareBundle.feed.feedCount)
-        val diaperDelta = StatsAggregation.formatCountDelta(diaperAgg.diaperCount, compareBundle.diaper.diaperCount)
+            }
+        } else {
+            Column(
+                modifier = Modifier.fillMaxSize()
+            ) {
+                InsightsHeader(
+                    isSelectionMode = isSelectionMode,
+                    selectedCount = selectedEventRows.size,
+                    onClearSelection = {
+                        isSelectionMode = false
+                        selectedEventRows = emptySet()
+                    },
+                    onDeleteSelected = {
+                        scope.launch {
+                            val success = repository.deleteEvents(selectedEventRows.toList())
+                            if (success) {
+                                HapticFeedback.success(context)
+                                snackbarHostState.showSnackbar("Deleted ${selectedEventRows.size} event(s)")
+                                selectedEventRows = emptySet()
+                                isSelectionMode = false
+                            } else {
+                                HapticFeedback.error(context)
+                                snackbarHostState.showSnackbar("Failed to delete events")
+                            }
+                        }
+                    },
+                    onManualRefresh = {
+                        scope.launch {
+                            val result = repository.refresh(RefreshTrigger.Manual, force = true)
+                            if (!result.success) {
+                                snackbarHostState.showSnackbar(result.errorMessage ?: "Refresh failed")
+                            }
+                        }
+                    },
+                    isRefreshing = uiState.isRefreshing,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 16.dp),
+                )
 
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(MaterialTheme.colorScheme.background)
-                .padding(innerPadding)
-        ) {
-            if (isLoading && events.isEmpty()) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(32.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center
+                TabRow(
+                    selectedTabIndex = dayPagerState.currentPage,
+                    modifier = Modifier.fillMaxWidth(),
                 ) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(64.dp)
-                    )
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Text(
-                        text = "Loading…",
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = TextSecondary
-                    )
+                    InsightsDay.entries.forEachIndexed { index, day ->
+                        Tab(
+                            selected = dayPagerState.currentPage == index,
+                            onClick = {
+                                scope.launch {
+                                    dayPagerState.animateScrollToPage(index)
+                                }
+                            },
+                            text = { Text(if (day == InsightsDay.Today) "Today" else "Yesterday") }
+                        )
+                    }
                 }
-            } else {
-                LazyColumn(
+
+                HorizontalPager(
+                    state = dayPagerState,
                     modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                    state = rememberLazyListState()
-                ) {
-                    item {
-                        TabRow(
-                            selectedTabIndex = if (insightsDay == InsightsDay.Today) 0 else 1,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Tab(
-                                selected = insightsDay == InsightsDay.Today,
-                                onClick = { insightsDay = InsightsDay.Today },
-                                text = { Text("Today") }
-                            )
-                            Tab(
-                                selected = insightsDay == InsightsDay.Yesterday,
-                                onClick = { insightsDay = InsightsDay.Yesterday },
-                                text = { Text("Yesterday") }
-                            )
-                        }
-                    }
-                    item {
-                        Card(
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(16.dp),
-                            colors = CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
-                            )
-                        ) {
-                            Column(
-                                modifier = Modifier.padding(16.dp),
-                                verticalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                Text(
-                                    text = "Sleep: $sleepDelta $vsLabel",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = TextSecondary
-                                )
-                                Text(
-                                    text = "Feeds: $feedDelta $vsLabel",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = TextSecondary
-                                )
-                                Text(
-                                    text = "Diapers: $diaperDelta $vsLabel",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = TextSecondary
-                                )
+                    userScrollEnabled = !isSelectionMode && editingEvent == null,
+                    beyondViewportPageCount = 1,
+                ) { page ->
+                    val day = InsightsDay.entries[page]
+                    InsightsDayPage(
+                        day = day,
+                        allEvents = uiState.recentEvents,
+                        selectedEventRows = selectedEventRows,
+                        isSelectionMode = isSelectionMode,
+                        onSelectEvent = { rowNumber ->
+                            HapticFeedback.lightTap(context)
+                            selectedEventRows = if (selectedEventRows.contains(rowNumber)) {
+                                selectedEventRows - rowNumber
+                            } else {
+                                selectedEventRows + rowNumber
                             }
-                        }
-                    }
-                    item {
-                        InsightSummarySection(
-                            title = "Sleep",
-                            lines = buildList {
-                                add(
-                                    "Total sleep: ${
-                                        sleepAgg.totalSleepMinutes?.let { StatsAggregation.formatShortDurationMinutes(it) } ?: "—"
-                                    }"
-                                )
-                                add(
-                                    "Longest stretch: ${
-                                        sleepAgg.longestSleepMinutes?.let { StatsAggregation.formatShortDurationMinutes(it) } ?: "—"
-                                    }"
-                                )
-                                add(
-                                    "Wake windows: ${
-                                        if (sleepAgg.wakeWindowSummaries.isEmpty()) "—"
-                                        else sleepAgg.wakeWindowSummaries.joinToString()
-                                    }"
-                                )
+                        },
+                        onStartSelection = { rowNumber ->
+                            HapticFeedback.mediumImpact(context)
+                            if (!isSelectionMode) {
+                                isSelectionMode = true
+                                selectedEventRows = setOf(rowNumber)
                             }
-                        )
-                    }
-                    item {
-                        InsightSummarySection(
-                            title = "Feeding",
-                            lines = buildList {
-                                add("Feeds logged: ${feedAgg.feedCount}")
-                                if (feedAgg.intervalMinutesBetweenFeeds.isNotEmpty()) {
-                                    val avg = feedAgg.intervalMinutesBetweenFeeds.average().toInt()
-                                    add(
-                                        "Avg. interval between feeds: ${
-                                            StatsAggregation.formatAverageFeedIntervalMinutes(avg)
-                                        }"
-                                    )
-                                } else {
-                                    add("Intervals: — (need 2+ feeds)")
-                                }
-                            }
-                        )
-                    }
-                    item {
-                        InsightSummarySection(
-                            title = "Diapers",
-                            lines = buildList {
-                                add("Changes: ${diaperAgg.diaperCount}")
-                                add("Pee only: ${diaperAgg.peeOnlyCount} · With poop: ${diaperAgg.poopRelatedCount}")
-                            }
-                        )
-                    }
-                    item {
-                        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-                        Text(
-                            text = "Log",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(bottom = 4.dp)
-                        )
-                    }
-                    if (displayedEvents.isEmpty()) {
-                        item {
-                            Card(
-                                modifier = Modifier.fillMaxWidth(),
-                                colors = CardDefaults.cardColors(
-                                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                                ),
-                                shape = RoundedCornerShape(16.dp)
-                            ) {
-                                Column(
-                                    modifier = Modifier.padding(24.dp),
-                                    horizontalAlignment = Alignment.CenterHorizontally
-                                ) {
-                                    Text("📝", fontSize = 48.sp)
-                                    Spacer(modifier = Modifier.height(8.dp))
-                                    Text(
-                                        text = "No events for this day",
-                                        style = MaterialTheme.typography.titleMedium,
-                                        fontWeight = FontWeight.SemiBold
-                                    )
-                                    Text(
-                                        text = "Log from Home — entries appear here.",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = TextSecondary,
-                                        textAlign = TextAlign.Center
-                                    )
-                                }
-                            }
-                        }
-                    } else {
-                        items(displayedEvents, key = { it.rowNumber }) { event ->
-                            EventCard(
-                                event = event,
-                                isSelected = selectedEventRows.contains(event.rowNumber),
-                                isSelectionMode = isSelectionMode,
-                                onSelect = {
-                                    HapticFeedback.lightTap(context)
-                                    if (isSelectionMode) {
-                                        selectedEventRows = if (selectedEventRows.contains(event.rowNumber)) {
-                                            selectedEventRows - event.rowNumber
-                                        } else {
-                                            selectedEventRows + event.rowNumber
-                                        }
-                                    }
-                                },
-                                onLongPress = {
-                                    HapticFeedback.mediumImpact(context)
-                                    if (!isSelectionMode) {
-                                        isSelectionMode = true
-                                        selectedEventRows = setOf(event.rowNumber)
-                                    }
-                                },
-                                onEdit = {
-                                    HapticFeedback.lightTap(context)
-                                    editingEvent = event
-                                }
-                            )
-                        }
-                    }
+                        },
+                        onEditEvent = { event ->
+                            HapticFeedback.lightTap(context)
+                            editingEvent = event
+                        },
+                        listState = if (day == InsightsDay.Today) todayListState else yesterdayListState,
+                        modifier = Modifier.fillMaxSize(),
+                    )
                 }
             }
         }
     }
-    
-    // Edit dialog
+
     editingEvent?.let { event ->
         EditEventDialog(
             event = event,
             onDismiss = { editingEvent = null },
             onSave = { updatedEvent ->
                 scope.launch {
-                    HapticFeedback.mediumImpact(context)
-                    isLoading = true
-                    val success = backendService.updateEvent(googleSheetUrl, updatedEvent)
+                    val success = repository.updateEvent(updatedEvent)
                     if (success) {
                         HapticFeedback.success(context)
-                        snackbarHostState.showSnackbar("✓ Event updated")
+                        snackbarHostState.showSnackbar("Event updated")
                         editingEvent = null
-                        refreshEvents()
                     } else {
                         HapticFeedback.error(context)
-                        snackbarHostState.showSnackbar("❌ Failed to update event")
-                        isLoading = false
+                        snackbarHostState.showSnackbar("Failed to update event")
                     }
                 }
             }
         )
+    }
+}
+
+@Composable
+private fun InsightsHeader(
+    isSelectionMode: Boolean,
+    selectedCount: Int,
+    onClearSelection: () -> Unit,
+    onDeleteSelected: () -> Unit,
+    onManualRefresh: () -> Unit,
+    isRefreshing: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = if (isSelectionMode) "$selectedCount selected" else "Insights",
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            IconButton(onClick = onManualRefresh, enabled = !isRefreshing) {
+                Icon(Icons.Default.Refresh, contentDescription = "Refresh")
+            }
+            if (isSelectionMode) {
+                IconButton(onClick = onDeleteSelected, enabled = selectedCount > 0) {
+                    Icon(
+                        imageVector = Icons.Default.Delete,
+                        contentDescription = "Delete Selected",
+                        tint = MaterialTheme.colorScheme.error,
+                    )
+                }
+                IconButton(onClick = onClearSelection) {
+                    Icon(Icons.Default.CheckCircle, contentDescription = "Done")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun InsightsDayPage(
+    day: InsightsDay,
+    allEvents: List<BackendService.EventItem>,
+    selectedEventRows: Set<Int>,
+    isSelectionMode: Boolean,
+    onSelectEvent: (Int) -> Unit,
+    onStartSelection: (Int) -> Unit,
+    onEditEvent: (BackendService.EventItem) -> Unit,
+    listState: androidx.compose.foundation.lazy.LazyListState,
+    modifier: Modifier = Modifier,
+) {
+    val zone = ZoneId.systemDefault()
+    val nowMs = System.currentTimeMillis()
+    val nowMinute = nowMs / 60_000L
+    val currentBabyDayStart = BabyDay.babyDayStartContaining(nowMs, zone)
+    val anchorBabyDayStart = when (day) {
+        InsightsDay.Today -> currentBabyDayStart
+        InsightsDay.Yesterday -> BabyDay.previousBabyDayStartMs(currentBabyDayStart, zone)
+    }
+    val compareBabyDayStart = BabyDay.previousBabyDayStartMs(anchorBabyDayStart, zone)
+
+    val bundle = remember(allEvents, anchorBabyDayStart, day, nowMinute) {
+        StatsAggregation.insightBundleForBabyDay(
+            allEvents,
+            anchorBabyDayStart,
+            zone,
+            capFeedDiaperLogAtNow = day == InsightsDay.Today,
+        )
+    }
+    val compareBundle = remember(allEvents, compareBabyDayStart) {
+        StatsAggregation.insightBundleForBabyDay(
+            allEvents,
+            compareBabyDayStart,
+            zone,
+            capFeedDiaperLogAtNow = false,
+        )
+    }
+    val displayedRows = remember(allEvents, anchorBabyDayStart, currentBabyDayStart, nowMinute) {
+        StatsAggregation.insightsRowsForBabyDay(
+            allEvents,
+            anchorBabyDayStart,
+            zone,
+            capAtNow = anchorBabyDayStart == currentBabyDayStart,
+            nowMs = nowMs,
+        )
+    }
+
+    LazyColumn(
+        modifier = modifier.fillMaxSize(),
+        state = listState,
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        item {
+            Text(
+                text = "Log",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(bottom = 4.dp)
+            )
+        }
+
+        if (displayedRows.isEmpty()) {
+            item {
+                EmptyInsightsCard()
+            }
+        } else {
+            items(displayedRows, key = { it.stableKey }) { row ->
+                when (row) {
+                    is InsightsRow.RawEvent -> EventCard(
+                        event = row.event,
+                        isSelected = selectedEventRows.contains(row.event.rowNumber),
+                        isSelectionMode = isSelectionMode,
+                        onSelect = { onSelectEvent(row.event.rowNumber) },
+                        onLongPress = { onStartSelection(row.event.rowNumber) },
+                        onEdit = { onEditEvent(row.event) }
+                    )
+
+                    is InsightsRow.CompletedSleepSession -> CompletedSleepSessionCard(row)
+                    is InsightsRow.ActiveSleep -> ActiveSleepCard(row)
+                }
+            }
+        }
+        item {
+            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+            Text(
+                text = "Stats",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(bottom = 4.dp)
+            )
+        }
+        item {
+            val vsLabel = if (day == InsightsDay.Today) "vs yesterday" else "vs prior day"
+            val sleepDelta = StatsAggregation.formatSleepDeltaMinutes(
+                bundle.sleep.totalSleepMinutes,
+                compareBundle.sleep.totalSleepMinutes,
+            )
+            val feedDelta = StatsAggregation.formatCountDelta(bundle.feed.feedCount, compareBundle.feed.feedCount)
+            val diaperDelta = StatsAggregation.formatCountDelta(bundle.diaper.diaperCount, compareBundle.diaper.diaperCount)
+
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+                )
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text("Sleep: $sleepDelta $vsLabel", style = MaterialTheme.typography.bodyMedium, color = TextSecondary)
+                    Text("Feeds: $feedDelta $vsLabel", style = MaterialTheme.typography.bodyMedium, color = TextSecondary)
+                    Text("Diapers: $diaperDelta $vsLabel", style = MaterialTheme.typography.bodyMedium, color = TextSecondary)
+                }
+            }
+        }
+        item {
+            InsightSummarySection(
+                title = "Sleep",
+                lines = buildList {
+                    add("Total sleep: ${bundle.sleep.totalSleepMinutes?.let(StatsAggregation::formatShortDurationMinutes) ?: "—"}")
+                    add("Longest stretch: ${bundle.sleep.longestSleepMinutes?.let(StatsAggregation::formatShortDurationMinutes) ?: "—"}")
+                    add(
+                        "Wake windows: ${
+                            if (bundle.sleep.wakeWindowSummaries.isEmpty()) "—"
+                            else bundle.sleep.wakeWindowSummaries.joinToString()
+                        }"
+                    )
+                }
+            )
+        }
+        item {
+            InsightSummarySection(
+                title = "Feeding",
+                lines = buildList {
+                    add("Feeds logged: ${bundle.feed.feedCount}")
+                    if (bundle.feed.intervalMinutesBetweenFeeds.isNotEmpty()) {
+                        val avg = bundle.feed.intervalMinutesBetweenFeeds.average().toInt()
+                        add("Avg. interval: ${StatsAggregation.formatAverageFeedIntervalMinutes(avg)}")
+                    } else {
+                        add("Intervals: — (need 2+ feeds)")
+                    }
+                }
+            )
+        }
+        item {
+            InsightSummarySection(
+                title = "Diapers",
+                lines = buildList {
+                    add("Changes: ${bundle.diaper.diaperCount}")
+                    add("Pee only: ${bundle.diaper.peeOnlyCount} · With poop: ${bundle.diaper.poopRelatedCount}")
+                }
+            )
+        }
+    }
+}
+
+@Composable
+private fun EmptyInsightsCard() {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+        ),
+        shape = RoundedCornerShape(16.dp)
+    ) {
+        Column(
+            modifier = Modifier.padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text("📝", fontSize = 48.sp)
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "No events for this day",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+            Text(
+                text = "Log from Home and the day view will populate here.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = TextSecondary,
+                textAlign = TextAlign.Center
+            )
+        }
     }
 }
 
@@ -460,6 +525,132 @@ private fun InsightSummarySection(
     }
 }
 
+@Composable
+private fun CompletedSleepSessionCard(row: InsightsRow.CompletedSleepSession) {
+    val startTime = remember(row.startEvent.timestamp) {
+        ServerDateTimes.formatClock(row.startEvent.timestamp)
+    }
+    val endTime = remember(row.endEvent.timestamp) {
+        ServerDateTimes.formatClock(row.endEvent.timestamp)
+    }
+    val summaryNotes = remember(row.startEvent.notes, row.endEvent.notes) {
+        listOf(row.startEvent.notes, row.endEvent.notes)
+            .filter { it.isNotBlank() }
+            .joinToString(" · ")
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface
+        ),
+        border = BorderStroke(1.dp, CategorySleep.copy(alpha = 0.2f)),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            SleepBubble(icon = "😴")
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Sleep",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                )
+                Text(
+                    text = StatsAggregation.formatShortDurationMinutes(row.durationMinutes),
+                    style = MaterialTheme.typography.headlineMedium,
+                    color = CategorySleep,
+                    fontWeight = FontWeight.Bold,
+                )
+                Text(
+                    text = "Ended $endTime · $startTime–$endTime",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = TextSecondary,
+                )
+                if (summaryNotes.isNotBlank()) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = summaryNotes,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = TextSecondary,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ActiveSleepCard(row: InsightsRow.ActiveSleep) {
+    val startTime = remember(row.startEvent.timestamp) {
+        ServerDateTimes.formatClock(row.startEvent.timestamp)
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
+        ),
+        border = BorderStroke(1.dp, CategorySleep.copy(alpha = 0.3f))
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            SleepBubble(icon = "🌙")
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Sleep in progress",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                )
+                Text(
+                    text = StatsAggregation.formatShortDurationMinutes(row.elapsedMinutes).ifBlank { "Just started" },
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = CategorySleep,
+                    fontWeight = FontWeight.Bold,
+                )
+                Text(
+                    text = "Started $startTime",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = TextSecondary,
+                )
+                if (row.startEvent.notes.isNotBlank()) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = row.startEvent.notes,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = TextSecondary,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SleepBubble(icon: String) {
+    Box(
+        modifier = Modifier
+            .size(56.dp)
+            .clip(CircleShape)
+            .background(CategorySleep.copy(alpha = 0.18f)),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(text = icon, fontSize = 24.sp)
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun EventCard(
@@ -470,75 +661,31 @@ fun EventCard(
     onLongPress: () -> Unit,
     onEdit: () -> Unit
 ) {
-    val context = LocalContext.current
-    
-    // Parse the ISO timestamp
     val displayTime = remember(event.timestamp) {
-        try {
-            val isoFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply {
-                timeZone = TimeZone.getTimeZone("UTC")
-            }
-            val date = isoFormat.parse(event.timestamp)
-            val displayFormat = SimpleDateFormat("HH:mm", Locale.US)
-            date?.let { displayFormat.format(it) } ?: event.timestamp
-        } catch (e: Exception) {
-            event.timestamp
-        }
+        ServerDateTimes.formatClock(event.timestamp).takeUnless { it == "—" } ?: event.timestamp
     }
-    
     val displayDate = remember(event.timestamp) {
-        try {
-            val isoFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply {
-                timeZone = TimeZone.getTimeZone("UTC")
-            }
-            val date = isoFormat.parse(event.timestamp)
-            val displayFormat = SimpleDateFormat("MMM d", Locale.US)
-            date?.let { displayFormat.format(it) } ?: ""
-        } catch (e: Exception) {
-            ""
-        }
+        ServerDateTimes.formatDayLabel(event.timestamp)
     }
-    
-    // Get color based on event type
     val cardColor = remember(event.type) {
         when {
-            event.type == SheetEventMarkers.SLEEP_STARTED || event.type == "sleep_started" -> CategorySleep
-            event.type == SheetEventMarkers.SLEEP_ENDED || event.type == "sleep_ended" -> CategorySleep.copy(alpha = 0.85f)
+            SheetEventMarkers.isSleepStart(event.type) -> CategorySleep
+            SheetEventMarkers.isSleepEnd(event.type) -> CategorySleep.copy(alpha = 0.85f)
             event.type.contains("💩") && event.type.contains("💧") -> CategoryPoop
             event.type.contains("💧") -> CategoryPee
             event.type.contains("🐄") -> CategoryFeeding
             else -> Color.Gray
         }
     }
-    
-    // Animation for selection
-    val scale by animateFloatAsState(
-        targetValue = if (isSelected) 0.95f else 1.0f,
-        animationSpec = spring(
-            dampingRatio = Spring.DampingRatioMediumBouncy,
-            stiffness = Spring.StiffnessMedium
-        ),
-        label = "card_scale"
-    )
-    
+
     Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .scale(scale),
+        modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(
-            containerColor = if (isSelected)
-                cardColor.copy(alpha = 0.2f)
-            else
-                MaterialTheme.colorScheme.surface
+            containerColor = if (isSelected) cardColor.copy(alpha = 0.2f) else MaterialTheme.colorScheme.surface
         ),
-        elevation = CardDefaults.cardElevation(
-            defaultElevation = if (isSelected) 8.dp else 2.dp
-        ),
-        border = if (isSelected)
-            BorderStroke(3.dp, cardColor)
-        else
-            null,
+        border = if (isSelected) BorderStroke(3.dp, cardColor) else null,
+        elevation = CardDefaults.cardElevation(defaultElevation = if (isSelected) 6.dp else 2.dp),
         onClick = {
             if (isSelectionMode) {
                 onSelect()
@@ -552,12 +699,10 @@ fun EventCard(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Left side - Icon and info
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.weight(1f)
             ) {
-                // Selection indicator or icon
                 if (isSelectionMode) {
                     Checkbox(
                         checked = isSelected,
@@ -571,55 +716,25 @@ fun EventCard(
                             .background(cardColor.copy(alpha = 0.25f)),
                         contentAlignment = Alignment.Center
                     ) {
-                        // Better emoji rendering for combinations
-                        when {
-                            event.type == "💩💧" -> {
-                                // Poop & Pee - display as stack
-                                Column(
-                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                    verticalArrangement = Arrangement.Center
-                                ) {
-                                    Text(text = "💩", fontSize = 18.sp)
-                                    Text(text = "💧", fontSize = 18.sp)
-                                }
+                        when (event.type) {
+                            "💩💧" -> Row {
+                                Text(text = "💩", fontSize = 18.sp)
+                                Text(text = "💧", fontSize = 18.sp)
                             }
-                            event.type == "💧🐄" -> {
-                                // Pee + Feed - display side by side
-                                Row(
-                                    horizontalArrangement = Arrangement.Center,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text(text = "💧", fontSize = 18.sp)
-                                    Text(text = "🐄", fontSize = 18.sp)
-                                }
+                            "💧🐄", "💩🐄" -> Row {
+                                val (first, second) = if (event.type == "💧🐄") "💧" to "🐄" else "💩" to "🐄"
+                                Text(text = first, fontSize = 18.sp)
+                                Text(text = second, fontSize = 18.sp)
                             }
-                            event.type == "💩🐄" -> {
-                                // Poop + Feed - display as stack
-                                Column(
-                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                    verticalArrangement = Arrangement.Center
-                                ) {
-                                    Text(text = "💩", fontSize = 18.sp)
-                                    Text(text = "🐄", fontSize = 18.sp)
-                                }
-                            }
-                            else -> {
-                                // Single emoji
-                                Text(
-                                    text = event.type,
-                                    fontSize = 28.sp
-                                )
-                            }
+                            else -> Text(text = event.type, fontSize = 28.sp)
                         }
                     }
                 }
-                
+
                 Spacer(modifier = Modifier.width(16.dp))
-                
+
                 Column {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
                             text = displayTime,
                             style = MaterialTheme.typography.titleLarge,
@@ -647,13 +762,9 @@ fun EventCard(
                     }
                 }
             }
-            
-            // Right side - Actions
+
             if (!isSelectionMode) {
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    // Edit button
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     IconButton(onClick = onEdit) {
                         Icon(
                             imageVector = Icons.Default.Edit,
@@ -661,16 +772,10 @@ fun EventCard(
                             tint = MaterialTheme.colorScheme.primary
                         )
                     }
-                    
-                    // Long press to select
-                    IconButton(
-                        onClick = onLongPress,
-                        modifier = Modifier.size(40.dp)
-                    ) {
+                    IconButton(onClick = onLongPress) {
                         Icon(
                             imageVector = Icons.Default.MoreVert,
                             contentDescription = "Select",
-                            tint = MaterialTheme.colorScheme.onSurface
                         )
                     }
                 }
@@ -687,26 +792,18 @@ fun EditEventDialog(
     onSave: (BackendService.EventItem) -> Unit
 ) {
     val context = LocalContext.current
-    
-    // Parse the current timestamp
+
     val parsedDate = remember(event.timestamp) {
-        try {
-            val isoFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply {
-                timeZone = TimeZone.getTimeZone("UTC")
-            }
-            isoFormat.parse(event.timestamp) ?: Date()
-        } catch (e: Exception) {
-            Date()
-        }
+        ServerDateTimes.parseDate(event.timestamp) ?: Date()
     }
-    
+
     val calendar = remember { Calendar.getInstance().apply { time = parsedDate } }
     var editedHour by remember { mutableStateOf(calendar.get(Calendar.HOUR_OF_DAY)) }
     var editedMinute by remember { mutableStateOf(calendar.get(Calendar.MINUTE)) }
     var editedType by remember { mutableStateOf(event.type) }
     var editedNotes by remember { mutableStateOf(event.notes) }
     var showTypeSelector by remember { mutableStateOf(false) }
-    
+
     Dialog(onDismissRequest = onDismiss) {
         Card(
             shape = RoundedCornerShape(24.dp),
@@ -720,24 +817,22 @@ fun EditEventDialog(
                     .padding(24.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-                // Title
                 Text(
                     text = "Edit Event",
                     style = MaterialTheme.typography.headlineSmall,
                     fontWeight = FontWeight.Bold
                 )
-                
-                // Action Type Selector
+
                 Text(
                     text = "Action Type",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold
                 )
-                
+
                 Button(
-                    onClick = { 
+                    onClick = {
                         HapticFeedback.lightTap(context)
-                        showTypeSelector = !showTypeSelector 
+                        showTypeSelector = !showTypeSelector
                     },
                     modifier = Modifier.fillMaxWidth(),
                     colors = ButtonDefaults.buttonColors(
@@ -746,110 +841,48 @@ fun EditEventDialog(
                     ),
                     shape = RoundedCornerShape(12.dp)
                 ) {
-                    // Better emoji rendering for combinations
-                    when (editedType) {
-                        "💩💧" -> {
-                            Row(
-                                horizontalArrangement = Arrangement.Center,
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.padding(8.dp)
-                            ) {
-                                Text(text = "💩", fontSize = 24.sp)
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text(text = "💧", fontSize = 24.sp)
-                            }
-                        }
-                        "💧🐄", "💩🐄" -> {
-                            Row(
-                                horizontalArrangement = Arrangement.Center,
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.padding(8.dp)
-                            ) {
-                                val (emoji1, emoji2) = if (editedType == "💧🐄") "💧" to "🐄" else "💩" to "🐄"
-                                Text(text = emoji1, fontSize = 24.sp)
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text(text = emoji2, fontSize = 24.sp)
-                            }
-                        }
-                        else -> {
-                            Text(
-                                text = editedType,
-                                fontSize = 28.sp,
-                                modifier = Modifier.padding(8.dp)
-                            )
-                        }
-                    }
+                    Text(
+                        text = editedType,
+                        fontSize = 28.sp,
+                        modifier = Modifier.padding(8.dp)
+                    )
                 }
-                
-                // Type selector buttons
+
                 AnimatedVisibility(
                     visible = showTypeSelector,
                     enter = expandVertically(),
                     exit = shrinkVertically()
                 ) {
-                    Column(
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        ActionTypeButton(
-                            emoji = "💩💧",
-                            label = "Poop & Pee",
-                            isSelected = editedType == "💩💧",
-                            onClick = {
-                                HapticFeedback.lightTap(context)
-                                editedType = "💩💧"
-                                showTypeSelector = false
-                            }
-                        )
-                        ActionTypeButton(
-                            emoji = "💧",
-                            label = "Pee Only",
-                            isSelected = editedType == "💧",
-                            onClick = {
-                                HapticFeedback.lightTap(context)
-                                editedType = "💧"
-                                showTypeSelector = false
-                            }
-                        )
-                        ActionTypeButton(
-                            emoji = "🐄",
-                            label = "Feed",
-                            isSelected = editedType == "🐄",
-                            onClick = {
-                                HapticFeedback.lightTap(context)
-                                editedType = "🐄"
-                                showTypeSelector = false
-                            }
-                        )
-                        ActionTypeButton(
-                            emoji = "💧🐄",
-                            label = "Pee + Feed",
-                            isSelected = editedType == "💧🐄",
-                            onClick = {
-                                HapticFeedback.lightTap(context)
-                                editedType = "💧🐄"
-                                showTypeSelector = false
-                            }
-                        )
-                        ActionTypeButton(
-                            emoji = "💩🐄",
-                            label = "Poop + Feed",
-                            isSelected = editedType == "💩🐄",
-                            onClick = {
-                                HapticFeedback.lightTap(context)
-                                editedType = "💩🐄"
-                                showTypeSelector = false
-                            }
-                        )
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf(
+                            "😴" to "Sleep Started",
+                            "☀️" to "Sleep Ended",
+                            "💩💧" to "Poop & Pee",
+                            "💧" to "Pee Only",
+                            "🐄" to "Feed",
+                            "💧🐄" to "Pee + Feed",
+                            "💩🐄" to "Poop + Feed",
+                        ).forEach { (emoji, label) ->
+                            ActionTypeButton(
+                                emoji = emoji,
+                                label = label,
+                                isSelected = editedType == emoji,
+                                onClick = {
+                                    HapticFeedback.lightTap(context)
+                                    editedType = emoji
+                                    showTypeSelector = false
+                                }
+                            )
+                        }
                     }
                 }
-                
-                // Time picker
+
                 Text(
                     text = "Time",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold
                 )
-                
+
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -857,22 +890,18 @@ fun EditEventDialog(
                     horizontalArrangement = Arrangement.Center,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Hour picker
                     NumberPicker(
                         value = editedHour,
                         range = 0..23,
                         onValueChange = { editedHour = it },
                         modifier = Modifier.weight(1f)
                     )
-                    
                     Text(
                         text = ":",
                         style = MaterialTheme.typography.headlineLarge,
                         fontWeight = FontWeight.Bold,
                         modifier = Modifier.padding(horizontal = 8.dp)
                     )
-                    
-                    // Minute picker
                     NumberPicker(
                         value = editedMinute,
                         range = 0..59,
@@ -880,14 +909,13 @@ fun EditEventDialog(
                         modifier = Modifier.weight(1f)
                     )
                 }
-                
-                // Notes
+
                 Text(
                     text = "Notes",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold
                 )
-                
+
                 OutlinedTextField(
                     value = editedNotes,
                     onValueChange = { editedNotes = it },
@@ -896,8 +924,7 @@ fun EditEventDialog(
                     shape = RoundedCornerShape(12.dp),
                     maxLines = 2
                 )
-                
-                // Action buttons
+
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -912,11 +939,10 @@ fun EditEventDialog(
                     ) {
                         Text("Cancel")
                     }
-                    
+
                     Button(
                         onClick = {
                             HapticFeedback.mediumImpact(context)
-                            // Create updated event with new timestamp
                             val updatedCalendar = Calendar.getInstance().apply {
                                 time = parsedDate
                                 set(Calendar.HOUR_OF_DAY, editedHour)
@@ -926,14 +952,15 @@ fun EditEventDialog(
                             }
                             val newTimestamp = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US)
                                 .format(updatedCalendar.time)
-                            
-                            val updatedEvent = BackendService.EventItem(
-                                rowNumber = event.rowNumber,
-                                timestamp = newTimestamp,
-                                type = editedType,
-                                notes = editedNotes
+
+                            onSave(
+                                BackendService.EventItem(
+                                    rowNumber = event.rowNumber,
+                                    timestamp = newTimestamp,
+                                    type = editedType,
+                                    notes = editedNotes
+                                )
                             )
-                            onSave(updatedEvent)
                         },
                         modifier = Modifier.weight(1f),
                         shape = RoundedCornerShape(12.dp)
@@ -975,40 +1002,12 @@ fun ActionTypeButton(
             horizontalArrangement = Arrangement.Start,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Better emoji rendering for combinations
-            Box(
-                modifier = Modifier.padding(end = 12.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                when (emoji) {
-                    "💩💧", "💧🐄", "💩🐄" -> {
-                        Row(
-                            horizontalArrangement = Arrangement.Center,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            val (emoji1, emoji2) = when (emoji) {
-                                "💩💧" -> "💩" to "💧"
-                                "💧🐄" -> "💧" to "🐄"
-                                else -> "💩" to "🐄"
-                            }
-                            Text(text = emoji1, fontSize = 22.sp)
-                            Spacer(modifier = Modifier.width(2.dp))
-                            Text(text = emoji2, fontSize = 22.sp)
-                        }
-                    }
-                    else -> {
-                        Text(
-                            text = emoji,
-                            fontSize = 24.sp
-                        )
-                    }
-                }
-            }
             Text(
-                text = label,
-                fontSize = 16.sp,
-                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                text = emoji,
+                fontSize = 24.sp,
+                modifier = Modifier.padding(end = 12.dp)
             )
+            Text(text = label, fontWeight = FontWeight.SemiBold)
         }
     }
 }

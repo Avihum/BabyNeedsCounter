@@ -26,6 +26,32 @@ import java.util.concurrent.TimeUnit
 object SheetEventMarkers {
     const val SLEEP_STARTED = "😴"
     const val SLEEP_ENDED = "☀️"
+
+    fun isSleepStart(type: String?): Boolean {
+        if (type.isNullOrBlank()) return false
+        val trimmed = type.trim()
+        val lower = trimmed.lowercase(Locale.US)
+        return trimmed == SLEEP_STARTED ||
+            lower == "sleep_started" ||
+            trimmed.startsWith("$SLEEP_STARTED ") ||
+            lower.contains("fell asleep") ||
+            lower.contains("sleep started") ||
+            lower.contains("sleep start")
+    }
+
+    fun isSleepEnd(type: String?): Boolean {
+        if (type.isNullOrBlank()) return false
+        val trimmed = type.trim()
+        val lower = trimmed.lowercase(Locale.US)
+        return trimmed == SLEEP_ENDED ||
+            lower == "sleep_ended" ||
+            trimmed.startsWith("$SLEEP_ENDED ") ||
+            lower.contains("woke up") ||
+            lower.contains("wake up") ||
+            lower.contains("wake-up") ||
+            lower.contains("sleep ended") ||
+            lower.contains("sleep end")
+    }
 }
 
 class BackendService(private val context: Context) {
@@ -36,8 +62,6 @@ class BackendService(private val context: Context) {
         .writeTimeout(30, TimeUnit.SECONDS)
         .build()
     
-    private val statsCache = StatsCache(context)
-    
     data class BabyEvent(
         val timestamp: String,
         /** Sheet column B: emoji markers (e.g. 🐄 💧 😴 ☀️). */
@@ -47,7 +71,7 @@ class BackendService(private val context: Context) {
     
     data class EventItem(
         val rowNumber: Int,
-        val timestamp: String, // ISO format from server
+        val timestamp: String, // UTC ISO instant or sheet-local "yyyy-MM-dd HH:mm"
         val type: String,
         val notes: String
     )
@@ -124,7 +148,7 @@ class BackendService(private val context: Context) {
         }
     }
     
-    suspend fun fetchTodayStats(googleSheetUrl: String, useCache: Boolean = true): TodayStats? {
+    suspend fun fetchTodayStats(googleSheetUrl: String): TodayStats? {
         if (googleSheetUrl.isEmpty()) {
             return null
         }
@@ -134,11 +158,13 @@ class BackendService(private val context: Context) {
                 val webAppUrl = convertToWebAppUrl(googleSheetUrl)
 
                 val zone = ZoneId.systemDefault()
-                val startTime = BabyDay.formatSheetStartTime(
-                    BabyDay.babyDayStartContaining(System.currentTimeMillis(), zone),
-                    zone
+                val startTime = DateTimeFormatter.ISO_INSTANT.format(
+                    Instant.ofEpochMilli(BabyDay.babyDayStartContaining(System.currentTimeMillis(), zone))
                 )
-                val urlWithParams = "$webAppUrl?startTime=$startTime"
+                val base = webAppUrl.toHttpUrlOrNull() ?: return@withContext null
+                val urlWithParams = base.newBuilder()
+                    .addQueryParameter("startTime", startTime)
+                    .build()
                 
                 val request = Request.Builder()
                     .url(urlWithParams)
@@ -194,6 +220,13 @@ class BackendService(private val context: Context) {
                             null
                         }
 
+                    val previousSleepDurationLabel =
+                        if (jsonResponse.has("previousSleepDurationLabel") && !jsonResponse.isNull("previousSleepDurationLabel")) {
+                            jsonResponse.getString("previousSleepDurationLabel").takeIf { it.isNotBlank() }
+                        } else {
+                            null
+                        }
+
                     val stats = TodayStats(
                         peeCount = jsonResponse.optInt("peeCount", 0),
                         poopCount = jsonResponse.optInt("poopCount", 0),
@@ -203,49 +236,23 @@ class BackendService(private val context: Context) {
                         lastPoopTimeISO = lastPoopTimeISO,
                         lastSleepEventType = lastSleepEventType,
                         lastSleepEventTimeISO = lastSleepEventTimeISO,
-                        previousWakeWindowLabel = previousWakeWindowLabel
+                        previousWakeWindowLabel = previousWakeWindowLabel,
+                        previousSleepDurationLabel = previousSleepDurationLabel
                     )
                     
                     Log.d("BackendService", "Parsed stats: pee=${stats.peeCount}, poop=${stats.poopCount}, feed=${stats.getTimeSinceLastFeed()}, feedTimeISO=${stats.lastFeedTimeISO}")
-                    
-                    // Cache the stats for future use
-                    if (useCache) {
-                        statsCache.saveStats(stats)
-                        Log.d("BackendService", "Stats saved to cache")
-                    }
                     
                     stats
                 } else {
                     Log.e("BackendService", "Failed to fetch stats: ${response.code}")
                     Log.e("BackendService", "Response body: ${response.body?.string()}")
-                    
-                    // Return cached stats if available
-                    if (useCache) {
-                        Log.d("BackendService", "Attempting to return cached stats due to fetch failure")
-                        statsCache.getCachedStats()
-                    } else {
-                        null
-                    }
+                    null
                 }
             } catch (e: Exception) {
                 Log.e("BackendService", "Error fetching stats", e)
-                
-                // Return cached stats if available
-                if (useCache) {
-                    Log.d("BackendService", "Attempting to return cached stats due to exception")
-                    statsCache.getCachedStats()
-                } else {
-                    null
-                }
+                null
             }
         }
-    }
-    
-    /**
-     * Get cached stats without making a network call
-     */
-    suspend fun getCachedStats(): TodayStats? {
-        return statsCache.getCachedStats()
     }
     
     private fun convertToWebAppUrl(url: String): String {
@@ -265,21 +272,21 @@ class BackendService(private val context: Context) {
         /** Feeds logged in the current baby day (🐄), from stats API. */
         val feedCount: Int = 0,
         val lastFeedTimeISO: String?,
-        /** Most recent pee-related row today (column A as ISO). */
+        /** Most recent pee-related row today (UTC ISO or sheet-local wall clock). */
         val lastPeeTimeISO: String? = null,
-        /** Most recent poop-related row today (column A as ISO). */
+        /** Most recent poop-related row today (UTC ISO or sheet-local wall clock). */
         val lastPoopTimeISO: String? = null,
         /** Raw column B value from stats: 😴 / ☀️ for new rows, or legacy sleep_started / sleep_ended. */
         val lastSleepEventType: String? = null,
         val lastSleepEventTimeISO: String? = null,
         /** Last completed wake window in baby day (☀️→😴), e.g. "1h 25m"; for UI when currently awake. */
-        val previousWakeWindowLabel: String? = null
+        val previousWakeWindowLabel: String? = null,
+        /** Last completed sleep cycle in baby day (😴→☀️), e.g. "2h 10m". */
+        val previousSleepDurationLabel: String? = null
     ) {
-        private fun isSleepStartMarker(): Boolean =
-            lastSleepEventType == SheetEventMarkers.SLEEP_STARTED || lastSleepEventType == "sleep_started"
+        private fun isSleepStartMarker(): Boolean = SheetEventMarkers.isSleepStart(lastSleepEventType)
         
-        private fun isSleepEndMarker(): Boolean =
-            lastSleepEventType == SheetEventMarkers.SLEEP_ENDED || lastSleepEventType == "sleep_ended"
+        private fun isSleepEndMarker(): Boolean = SheetEventMarkers.isSleepEnd(lastSleepEventType)
         
         fun isSleeping(): Boolean = isSleepStartMarker()
         
@@ -333,12 +340,7 @@ class BackendService(private val context: Context) {
         }
         
         private fun formatIsoToClock(iso: String): String {
-            return try {
-                val d = parseIsoToDate(iso) ?: return "—"
-                SimpleDateFormat("HH:mm", Locale.US).format(d)
-            } catch (e: Exception) {
-                "—"
-            }
+            return ServerDateTimes.formatClock(iso)
         }
 
         /** Clock time (local) for last pee event today, or "—". */
@@ -378,24 +380,18 @@ class BackendService(private val context: Context) {
         }
         
         private fun parseIsoToDate(iso: String): Date? {
-            return try {
-                SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply {
-                    timeZone = java.util.TimeZone.getTimeZone("UTC")
-                }.parse(iso)
-            } catch (e: Exception) {
-                null
-            }
+            return ServerDateTimes.parseDate(iso)
         }
+
+        private fun parseLastFeedDate(): Date? {
+            if (lastFeedTimeISO == null) return null
+            return parseIsoToDate(lastFeedTimeISO)
+        }
+
         fun getTimeSinceLastFeed(): String {
-            if (lastFeedTimeISO == null) return "—"
+            val feedTime = parseLastFeedDate() ?: return "—"
             
             return try {
-                val feedTime = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply {
-                    timeZone = java.util.TimeZone.getTimeZone("UTC")
-                }.parse(lastFeedTimeISO)
-                
-                if (feedTime == null) return "—"
-                
                 val now = Date()
                 val diffMs = now.time - feedTime.time
                 val diffMinutes = (diffMs / 60000).toInt()
@@ -414,15 +410,9 @@ class BackendService(private val context: Context) {
         }
         
         fun getLastFeedTime(): String {
-            if (lastFeedTimeISO == null) return "—"
+            val feedTime = parseLastFeedDate() ?: return "—"
             
             return try {
-                val feedTime = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply {
-                    timeZone = java.util.TimeZone.getTimeZone("UTC")
-                }.parse(lastFeedTimeISO)
-                
-                if (feedTime == null) return "—"
-                
                 SimpleDateFormat("HH:mm", Locale.US).format(feedTime)
             } catch (e: Exception) {
                 "—"
@@ -430,15 +420,9 @@ class BackendService(private val context: Context) {
         }
         
         fun getNextFeedTime(): String {
-            if (lastFeedTimeISO == null) return "—"
+            val feedTime = parseLastFeedDate() ?: return "—"
             
             return try {
-                val feedTime = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply {
-                    timeZone = java.util.TimeZone.getTimeZone("UTC")
-                }.parse(lastFeedTimeISO)
-                
-                if (feedTime == null) return "—"
-                
                 // Add 3 hours (in milliseconds)
                 val nextFeedTime = Date(feedTime.time + (3 * 60 * 60 * 1000))
                 
@@ -449,15 +433,9 @@ class BackendService(private val context: Context) {
         }
         
         fun getTimeUntilNextFeed(): String {
-            if (lastFeedTimeISO == null) return "—"
+            val feedTime = parseLastFeedDate() ?: return "—"
             
             return try {
-                val feedTime = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply {
-                    timeZone = java.util.TimeZone.getTimeZone("UTC")
-                }.parse(lastFeedTimeISO)
-                
-                if (feedTime == null) return "—"
-                
                 // Add 3 hours to get next feed time
                 val nextFeedTime = Date(feedTime.time + (3 * 60 * 60 * 1000))
                 val now = Date()

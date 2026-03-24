@@ -9,6 +9,37 @@
 // 6. Set "Who has access" to "Anyone" 
 // 7. Copy the Web App URL and paste it in the app settings
 
+function parseDateTimeValue(value) {
+  if (!value) return null;
+  if (value instanceof Date) return value;
+
+  const text = String(value).trim();
+  const localMatch = text.match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+  if (localMatch) {
+    return new Date(
+      parseInt(localMatch[1], 10),
+      parseInt(localMatch[2], 10) - 1,
+      parseInt(localMatch[3], 10),
+      parseInt(localMatch[4], 10),
+      parseInt(localMatch[5], 10),
+      localMatch[6] ? parseInt(localMatch[6], 10) : 0
+    );
+  }
+
+  const parsed = new Date(text);
+  return isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function formatSheetTimestamp(sheet, value) {
+  const date = parseDateTimeValue(value);
+  if (!date || isNaN(date.getTime())) return null;
+  return Utilities.formatDate(
+    date,
+    sheet.getParent().getSpreadsheetTimeZone(),
+    'yyyy-MM-dd HH:mm'
+  );
+}
+
 function doPost(e) {
   try {
     // Parse the incoming JSON data
@@ -32,25 +63,13 @@ function doPost(e) {
     const newNotes = data.notes || '';
     
     // Parse the new event timestamp with robust parsing
-    let newEventTime = new Date(newTimestamp);
-    
-    // If parsing failed, try manual parsing for "YYYY-MM-DD HH:MM" format
-    if (isNaN(newEventTime.getTime())) {
-      const match = newTimestamp.match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{1,2}):(\d{2})$/);
-      if (match) {
-        newEventTime = new Date(
-          parseInt(match[1]), // year
-          parseInt(match[2]) - 1, // month (0-indexed)
-          parseInt(match[3]), // day
-          parseInt(match[4]), // hour
-          parseInt(match[5])  // minute
-        );
-        Logger.log('Manually parsed timestamp: ' + newEventTime.toISOString());
-      }
+    const newEventTime = parseDateTimeValue(newTimestamp);
+    if (newEventTime) {
+      Logger.log('Parsed timestamp: ' + newEventTime.toISOString());
     }
     
     // Validate the new event time
-    if (isNaN(newEventTime.getTime())) {
+    if (!newEventTime || isNaN(newEventTime.getTime())) {
       return ContentService.createTextOutput(JSON.stringify({
         'status': 'error',
         'message': 'Invalid timestamp format: ' + newTimestamp
@@ -92,15 +111,10 @@ function doPost(e) {
       }
       
       // Parse existing timestamp - handle both Date objects and strings
-      let existingTime;
-      if (existingTimestamp instanceof Date) {
-        existingTime = existingTimestamp;
-      } else {
-        existingTime = new Date(existingTimestamp);
-      }
+      const existingTime = parseDateTimeValue(existingTimestamp);
       
       // Validate the parsed date
-      if (isNaN(existingTime.getTime())) {
+      if (!existingTime || isNaN(existingTime.getTime())) {
         Logger.log('Row ' + row + ': WARNING - Invalid date parsed from: ' + existingTimestamp);
         // If we can't parse it, treat as very old and continue
         continue;
@@ -189,6 +203,8 @@ function doGet(e) {
 function getDetailedEvents(sheet, data, e) {
   const startTimeParam = e.parameter.startTime;
   const endTimeParam = e.parameter.endTime;
+  const startTime = parseDateTimeValue(startTimeParam);
+  const endTime = parseDateTimeValue(endTimeParam);
   
   Logger.log('GetDetailedEvents - StartTime parameter: ' + startTimeParam);
   Logger.log('GetDetailedEvents - EndTime parameter: ' + endTimeParam);
@@ -201,35 +217,25 @@ function getDetailedEvents(sheet, data, e) {
     const row = data[i];
     if (!row[0]) continue; // Skip empty rows
     
-    let eventTime;
-    const timestamp = row[0];
-    
-    // Handle both Date objects and string timestamps
-    if (timestamp instanceof Date) {
-      eventTime = timestamp;
-    } else {
-      eventTime = new Date(timestamp);
-    }
+    const eventTime = parseDateTimeValue(row[0]);
     
     // Validate the date
-    if (isNaN(eventTime.getTime())) continue;
+    if (!eventTime || isNaN(eventTime.getTime())) continue;
     
     // Filter by startTime if provided
-    if (startTimeParam) {
-      const startTime = new Date(startTimeParam);
+    if (startTime) {
       if (eventTime < startTime) continue;
     }
     
     // Filter by endTime if provided (exclusive upper bound)
-    if (endTimeParam) {
-      const endTime = new Date(endTimeParam);
+    if (endTime) {
       if (eventTime >= endTime) continue;
     }
     
     // Add event with row number (i + 1 because sheets are 1-indexed)
     events.push({
       rowNumber: i + 1,
-      timestamp: eventTime.toISOString(),
+      timestamp: formatSheetTimestamp(sheet, eventTime),
       type: row[1] || '',
       notes: row[2] || ''
     });
@@ -255,29 +261,21 @@ function getStats(sheet, data, e) {
   
   let todayEvents = [];
   if (startTimeParam) {
-    // Parse the start time (format: "YYYY-MM-DD HH:mm")
-    const startTime = new Date(startTimeParam);
+    const startTime = parseDateTimeValue(startTimeParam);
     Logger.log('Parsed startTime: ' + startTime);
+    if (!startTime || isNaN(startTime.getTime())) {
+      Logger.log('Invalid startTime parameter, returning no events');
+      todayEvents = [];
+    } else {
     
-    // Filter events from startTime onwards (skip header row)
-    todayEvents = data.slice(1).filter(row => {
-      if (!row[0]) return false;
-      
-      let eventTime;
-      const timestamp = row[0];
-      
-      // Handle both Date objects and string timestamps
-      if (timestamp instanceof Date) {
-        eventTime = timestamp;
-      } else {
-        // Try to parse string timestamp
-        eventTime = new Date(timestamp);
-      }
-      
-      // Include events from startTime onwards
-      const isAfterStart = eventTime >= startTime;
-      return isAfterStart;
-    });
+      // Filter events from startTime onwards (skip header row)
+      todayEvents = data.slice(1).filter(row => {
+        if (!row[0]) return false;
+        const eventTime = parseDateTimeValue(row[0]);
+        if (!eventTime || isNaN(eventTime.getTime())) return false;
+        return eventTime >= startTime;
+      });
+    }
   } else {
     // Return all events if no startTime specified (skip header row)
     todayEvents = data.slice(1);
@@ -306,18 +304,6 @@ function getStats(sheet, data, e) {
     return type && String(type).includes('🐄');
   }).length;
 
-  function cellToIso(cell) {
-    if (!cell) return null;
-    if (cell instanceof Date) {
-      return cell.toISOString();
-    }
-    const parsed = new Date(cell);
-    if (!isNaN(parsed.getTime())) {
-      return parsed.toISOString();
-    }
-    return null;
-  }
-
   // todayEvents is newest-first: first matching row is most recent today
   let lastPeeTimeISO = null;
   let lastPoopTimeISO = null;
@@ -326,10 +312,10 @@ function getStats(sheet, data, e) {
     if (!row[0] || !row[1]) continue;
     const type = String(row[1]);
     if (lastPeeTimeISO === null && type.includes('💧')) {
-      lastPeeTimeISO = cellToIso(row[0]);
+      lastPeeTimeISO = formatSheetTimestamp(sheet, row[0]);
     }
     if (lastPoopTimeISO === null && type.includes('💩')) {
-      lastPoopTimeISO = cellToIso(row[0]);
+      lastPoopTimeISO = formatSheetTimestamp(sheet, row[0]);
     }
     if (lastPeeTimeISO && lastPoopTimeISO) break;
   }
@@ -347,16 +333,7 @@ function getStats(sheet, data, e) {
   // Return the raw timestamp - let the client calculate time difference
   let lastFeedTimeISO = null;
   if (feedEvents.length > 0) {
-    const feedTime = feedEvents[0][0];
-    if (feedTime instanceof Date) {
-      lastFeedTimeISO = feedTime.toISOString();
-    } else {
-      // Try to parse string timestamp
-      const parsed = new Date(feedTime);
-      if (!isNaN(parsed.getTime())) {
-        lastFeedTimeISO = parsed.toISOString();
-      }
-    }
+    lastFeedTimeISO = formatSheetTimestamp(sheet, feedEvents[0][0]);
   }
   
   // Latest sleep event (sheet order: newest first — same as allEvents[0])
@@ -372,15 +349,9 @@ function getStats(sheet, data, e) {
     if (type === SHEET_SLEEP_STARTED || type === SHEET_SLEEP_ENDED ||
         type === 'sleep_started' || type === 'sleep_ended') {
       lastSleepEventType = type;
-      const t = row[0];
-      let eventTime;
-      if (t instanceof Date) {
-        eventTime = t;
-      } else {
-        eventTime = new Date(t);
-      }
-      if (!isNaN(eventTime.getTime())) {
-        lastSleepEventTimeISO = eventTime.toISOString();
+      const eventTime = parseDateTimeValue(row[0]);
+      if (eventTime && !isNaN(eventTime.getTime())) {
+        lastSleepEventTimeISO = formatSheetTimestamp(sheet, eventTime);
       }
       break;
     }
@@ -403,29 +374,45 @@ function getStats(sheet, data, e) {
   }
 
   let previousWakeWindowLabel = null;
+  let previousSleepDurationLabel = null;
   const sleepMarkers = [];
+  const allSleepMarkers = [];
   for (let i = 0; i < todayEvents.length; i++) {
     const row = todayEvents[i];
     if (!row[0] || !row[1]) continue;
     const type = String(row[1]);
     if (!isWakeMarker(type) && !isSleepMarker(type)) continue;
-    let eventTime;
-    const ts = row[0];
-    if (ts instanceof Date) {
-      eventTime = ts;
-    } else {
-      eventTime = new Date(ts);
-    }
-    if (isNaN(eventTime.getTime())) continue;
+    const eventTime = parseDateTimeValue(row[0]);
+    if (!eventTime || isNaN(eventTime.getTime())) continue;
     sleepMarkers.push({ t: eventTime.getTime(), type: type });
   }
+  for (let i = 0; i < allEvents.length; i++) {
+    const row = allEvents[i];
+    if (!row[0] || !row[1]) continue;
+    const type = String(row[1]);
+    if (!isWakeMarker(type) && !isSleepMarker(type)) continue;
+    const eventTime = parseDateTimeValue(row[0]);
+    if (!eventTime || isNaN(eventTime.getTime())) continue;
+    allSleepMarkers.push({ t: eventTime.getTime(), type: type });
+  }
   sleepMarkers.sort(function (a, b) { return a.t - b.t; });
+  allSleepMarkers.sort(function (a, b) { return a.t - b.t; });
   const completedWakeMs = [];
+  const completedSleepMs = [];
   for (let i = 0; i < sleepMarkers.length - 1; i++) {
     if (isWakeMarker(sleepMarkers[i].type) && isSleepMarker(sleepMarkers[i + 1].type)) {
       const dur = sleepMarkers[i + 1].t - sleepMarkers[i].t;
       if (dur > 0) completedWakeMs.push(dur);
     }
+  }
+  for (let i = 0; i < allSleepMarkers.length - 1; i++) {
+    if (isSleepMarker(allSleepMarkers[i].type) && isWakeMarker(allSleepMarkers[i + 1].type)) {
+      const dur = allSleepMarkers[i + 1].t - allSleepMarkers[i].t;
+      if (dur > 0) completedSleepMs.push(dur);
+    }
+  }
+  if (completedSleepMs.length > 0) {
+    previousSleepDurationLabel = formatDurationMs(completedSleepMs[completedSleepMs.length - 1]);
   }
   if (sleepMarkers.length > 0 && isWakeMarker(sleepMarkers[sleepMarkers.length - 1].type) && completedWakeMs.length > 0) {
     previousWakeWindowLabel = formatDurationMs(completedWakeMs[completedWakeMs.length - 1]);
@@ -436,6 +423,7 @@ function getStats(sheet, data, e) {
     poopCount: poopCount,
     feedCount: feedCount,
     previousWakeWindowLabel: previousWakeWindowLabel,
+    previousSleepDurationLabel: previousSleepDurationLabel,
     lastPeeTimeISO: lastPeeTimeISO,
     lastPoopTimeISO: lastPoopTimeISO,
     lastFeedTimeISO: lastFeedTimeISO,
@@ -469,23 +457,9 @@ function updateEvent(data) {
     Logger.log('Updating row ' + rowNumber + ' with timestamp: ' + newTimestamp);
     
     // Parse the new timestamp
-    let newEventTime = new Date(newTimestamp);
+    const newEventTime = parseDateTimeValue(newTimestamp);
     
-    // Manual parsing for "YYYY-MM-DD HH:MM" format if needed
-    if (isNaN(newEventTime.getTime())) {
-      const match = newTimestamp.match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{1,2}):(\d{2})$/);
-      if (match) {
-        newEventTime = new Date(
-          parseInt(match[1]),
-          parseInt(match[2]) - 1,
-          parseInt(match[3]),
-          parseInt(match[4]),
-          parseInt(match[5])
-        );
-      }
-    }
-    
-    if (isNaN(newEventTime.getTime())) {
+    if (!newEventTime || isNaN(newEventTime.getTime())) {
       return ContentService.createTextOutput(JSON.stringify({
         'status': 'error',
         'message': 'Invalid timestamp format'

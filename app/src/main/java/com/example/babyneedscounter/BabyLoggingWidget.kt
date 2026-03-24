@@ -92,38 +92,27 @@ class BabyLoggingWidget : AppWidgetProvider() {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         scope.launch {
             try {
-                val settingsManager = SettingsManager(context)
-                val googleSheetUrl = settingsManager.googleSheetUrl.first()
-                
-                if (googleSheetUrl.isNotEmpty()) {
-                    val backendService = BackendService(context)
-                    val event = BackendService.BabyEvent(
+                val repository = BabyRepository(context)
+                repository.setSourceUrl(SettingsManager(context).googleSheetUrl.first())
+                val success = repository.logEvent(
+                    BackendService.BabyEvent(
                         timestamp = BackendService.getCurrentTimestamp(),
                         type = eventType,
                         notes = ""
                     )
-                    val success = backendService.logEvent(googleSheetUrl, event).success
-                    
-                    Handler(Looper.getMainLooper()).post {
-                        if (success) {
-                            // Success haptic feedback
-                            HapticFeedback.success(context)
-                            Toast.makeText(context, "✓ $displayName tracked!", Toast.LENGTH_SHORT).show()
-                            Log.d("BabyNeeds", "Widget: Successfully synced - $displayName")
-                            // Update stats widgets
-                            updateStatsWidgets(context)
-                        } else {
-                            // Error haptic feedback
-                            HapticFeedback.error(context)
-                            Toast.makeText(context, "❌ Failed to save", Toast.LENGTH_SHORT).show()
-                            Log.e("BabyNeeds", "Widget: Failed to sync")
-                        }
-                    }
-                } else {
-                    Handler(Looper.getMainLooper()).post {
+                ).success
+
+                Handler(Looper.getMainLooper()).post {
+                    if (success) {
+                        HapticFeedback.success(context)
+                        Toast.makeText(context, "✓ $displayName tracked!", Toast.LENGTH_SHORT).show()
+                        Log.d("BabyNeeds", "Widget: Successfully synced - $displayName")
+                        updateStatsWidgets(context)
+                    } else {
                         HapticFeedback.error(context)
+                        Toast.makeText(context, "❌ Failed to save", Toast.LENGTH_SHORT).show()
+                        Log.e("BabyNeeds", "Widget: Failed to sync")
                     }
-                    Log.w("BabyNeeds", "Widget: No Google Sheet URL configured")
                 }
             } catch (e: Exception) {
                 Handler(Looper.getMainLooper()).post {
@@ -135,23 +124,7 @@ class BabyLoggingWidget : AppWidgetProvider() {
     }
 
     private fun updateStatsWidgets(context: Context) {
-        val appWidgetManager = AppWidgetManager.getInstance(context)
-        
-        // Update stats widget
-        val statsWidgetIds = appWidgetManager.getAppWidgetIds(
-            android.content.ComponentName(context, BabyStatsWidget::class.java)
-        )
-        for (widgetId in statsWidgetIds) {
-            BabyStatsWidget.updateAppWidget(context, appWidgetManager, widgetId)
-        }
-        
-        // Update feed times widget
-        val feedTimesWidgetIds = appWidgetManager.getAppWidgetIds(
-            android.content.ComponentName(context, BabyFeedTimesWidget::class.java)
-        )
-        for (widgetId in feedTimesWidgetIds) {
-            BabyFeedTimesWidget.updateAppWidget(context, appWidgetManager, widgetId)
-        }
+        WidgetUpdater.requestUpdateAll(context)
     }
 
     companion object {

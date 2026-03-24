@@ -5,8 +5,6 @@ import android.appwidget.AppWidgetManager
 import android.appwidget.AppWidgetProvider
 import android.content.Context
 import android.content.Intent
-import android.os.Handler
-import android.os.Looper
 import android.util.Log
 import android.widget.RemoteViews
 import kotlinx.coroutines.CoroutineScope
@@ -62,39 +60,24 @@ class BabyStatsWidget : AppWidgetProvider() {
                         val googleSheetUrl = settingsManager.googleSheetUrl.first()
                         
                         if (googleSheetUrl.isNotEmpty()) {
-                            val backendService = BackendService(context)
-                            
-                            // 1. First, load cached data immediately for instant display
-                            val cachedStats = backendService.getCachedStats()
-                            if (cachedStats != null) {
-                                Log.d("BabyStatsWidget", "Displaying cached stats immediately")
-                                Handler(Looper.getMainLooper()).post {
-                                    views.setTextViewText(R.id.widget_stats_pee_count, cachedStats.peeCount.toString())
-                                    views.setTextViewText(R.id.widget_stats_poop_count, cachedStats.poopCount.toString())
-                                    views.setTextViewText(R.id.widget_stats_feed_time, cachedStats.getTimeSinceLastFeed())
-                                    appWidgetManager.updateAppWidget(appWidgetId, views)
-                                }
+                            val repository = BabyRepository(context)
+                            repository.setSourceUrl(googleSheetUrl)
+
+                            var stats = repository.cachedHomeStats()
+                            if (stats == null) {
+                                repository.refresh(RefreshTrigger.Manual, force = true)
+                                stats = repository.cachedHomeStats()
                             }
-                            
-                            // 2. Then fetch fresh data in background
-                            val stats = backendService.fetchTodayStats(googleSheetUrl, useCache = true)
-                            
-                            if (stats != null) {
-                                Log.d("BabyStatsWidget", "Updating with fresh stats")
-                                Handler(Looper.getMainLooper()).post {
-                                    views.setTextViewText(R.id.widget_stats_pee_count, stats.peeCount.toString())
-                                    views.setTextViewText(R.id.widget_stats_poop_count, stats.poopCount.toString())
-                                    views.setTextViewText(R.id.widget_stats_feed_time, stats.getTimeSinceLastFeed())
-                                    appWidgetManager.updateAppWidget(appWidgetId, views)
-                                }
-                            }
+
+                            views.setTextViewText(R.id.widget_stats_pee_count, stats?.peeCount?.toString() ?: "—")
+                            views.setTextViewText(R.id.widget_stats_poop_count, stats?.poopCount?.toString() ?: "—")
+                            views.setTextViewText(R.id.widget_stats_feed_time, stats?.getTimeSinceLastFeed() ?: "—")
+                            appWidgetManager.updateAppWidget(appWidgetId, views)
                         } else {
-                            Handler(Looper.getMainLooper()).post {
-                                views.setTextViewText(R.id.widget_stats_pee_count, "—")
-                                views.setTextViewText(R.id.widget_stats_poop_count, "—")
-                                views.setTextViewText(R.id.widget_stats_feed_time, "—")
-                                appWidgetManager.updateAppWidget(appWidgetId, views)
-                            }
+                            views.setTextViewText(R.id.widget_stats_pee_count, "—")
+                            views.setTextViewText(R.id.widget_stats_poop_count, "—")
+                            views.setTextViewText(R.id.widget_stats_feed_time, "—")
+                            appWidgetManager.updateAppWidget(appWidgetId, views)
                         }
                     } catch (e: Exception) {
                         Log.e("BabyStatsWidget", "Error fetching stats", e)

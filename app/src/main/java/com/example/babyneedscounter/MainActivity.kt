@@ -139,8 +139,13 @@ private sealed class HomeSheet {
 /** Rich text layout for home logging cards (hierarchy + scanability). */
 sealed class HomeCardBodyStyle {
     data class Standard(val subtitle: String) : HomeCardBodyStyle()
-    data class Feeding(val nextIn: String, val lastAgo: String, val todayFeedCount: Int) : HomeCardBodyStyle()
-    data class Sleep(val state: String, val duration: String) : HomeCardBodyStyle()
+    data class Feeding(
+        val nextAt: String,
+        val nextIn: String,
+        val lastAgo: String,
+        val todayFeedCount: Int
+    ) : HomeCardBodyStyle()
+    data class Sleep(val state: String, val duration: String, val previousSleepLine: String) : HomeCardBodyStyle()
     data class Diaper(val line: String) : HomeCardBodyStyle()
 }
 
@@ -152,13 +157,14 @@ private fun sleepDurationPrimaryLine(
     if (todayStats == null) return "—"
     return when {
         sleeping -> todayStats.getSleepDurationLabel()
-        awakeFromLastWake -> {
-            val awake = todayStats.getAwakeDurationLabel()
-            val prev = todayStats.previousWakeWindowLabel
-            if (!prev.isNullOrBlank()) "$awake · Prev: $prev" else awake
-        }
+        awakeFromLastWake -> todayStats.getAwakeDurationLabel()
         else -> "—"
     }
+}
+
+private fun formatPreviousSleepLine(previousSleepDurationLabel: String?): String {
+    val label = previousSleepDurationLabel?.takeIf { it.isNotBlank() } ?: "—"
+    return "Previous sleep cycle: $label"
 }
 
 /** One line: today count + last clock time or "none today". */
@@ -174,15 +180,54 @@ private fun formatLastFeedSecondaryLine(lastAgo: String): String = when {
     else -> "Last: $lastAgo ago"
 }
 
-/** Compact Feeding card metadata: keep it short so the ETA stays visible on narrow phones. */
-private fun formatCompactFeedMetaLine(lastAgo: String, todayFeedCount: Int): String {
+/** Compact Feeding card metadata: next countdown plus the existing last/today context. */
+private fun formatCompactFeedMetaLine(nextIn: String, lastAgo: String, todayFeedCount: Int): String {
+    val next = when {
+        nextIn == "—" -> "In —"
+        nextIn == "Now!" -> "Now"
+        else -> "In $nextIn"
+    }
     val last = when {
         lastAgo == "—" -> "Last —"
-        lastAgo.equals("just now", ignoreCase = true) -> "Last just now"
-        else -> "Last $lastAgo ago"
+        lastAgo.equals("just now", ignoreCase = true) -> "Last now"
+        else -> "Last $lastAgo"
     }
-    return "$last · Today $todayFeedCount"
+    return "$next · $last · $todayFeedCount today"
 }
+
+private fun formatFeedDetailLine(nextIn: String, lastAgo: String, todayFeedCount: Int): String {
+    val next = when {
+        nextIn == "—" -> "In —"
+        nextIn == "Now!" -> "Now"
+        else -> "In $nextIn"
+    }
+    return "$next · ${formatLastFeedSecondaryLine(lastAgo)} · Today: $todayFeedCount feeds"
+}
+
+private fun derivePreviousSleepDurationLabel(events: List<BackendService.EventItem>): String? {
+    val sleepMarkers = events.mapNotNull { event ->
+        val timeMs = StatsAggregation.parseEventTimeMs(event.timestamp) ?: return@mapNotNull null
+        when {
+            SheetEventMarkers.isSleepStart(event.type) -> timeMs to true
+            SheetEventMarkers.isSleepEnd(event.type) -> timeMs to false
+            else -> null
+        }
+    }.sortedBy { it.first }
+
+    var previousSleepMinutes: Int? = null
+    for (i in 0 until sleepMarkers.size - 1) {
+        val current = sleepMarkers[i]
+        val next = sleepMarkers[i + 1]
+        if (current.second && !next.second) {
+            val diffMinutes = ((next.first - current.first) / 60_000L).toInt()
+            if (diffMinutes > 0) previousSleepMinutes = diffMinutes
+        }
+    }
+    return previousSleepMinutes?.let(StatsAggregation::formatShortDurationMinutes)
+}
+
+private fun deriveLatestEventIso(events: List<BackendService.EventItem>, marker: String): String? =
+    events.firstOrNull { it.type.contains(marker) }?.timestamp
 
 /** Sheet emoji (column B) + short UI label for dialogs — never use legacy text for new logs. */
 private fun nextSleepEvent(isSleeping: Boolean): Pair<String, String> =
@@ -204,11 +249,9 @@ private fun buildEventTimestamp(useCustom: Boolean, hour: Int, minute: Int): Str
 private suspend fun completeLogAndSnackbar(
     snackbarHostState: SnackbarHostState,
     context: Context,
-    backendService: BackendService,
+    repository: BabyRepository,
     googleSheetUrl: String,
     event: BackendService.BabyEvent,
-    refreshStats: () -> Unit,
-    updateAllWidgets: () -> Unit,
 ): Boolean {
     if (googleSheetUrl.isEmpty()) {
         HapticFeedback.error(context)
@@ -217,11 +260,9 @@ private suspend fun completeLogAndSnackbar(
     }
     HapticFeedback.mediumImpact(context)
     return try {
-        val result = backendService.logEvent(googleSheetUrl, event)
+        val result = repository.logEvent(event)
         if (result.success) {
             HapticFeedback.success(context)
-            refreshStats()
-            updateAllWidgets()
             val row = result.rowNumber
             val snackResult = snackbarHostState.showSnackbar(
                 message = "Saved",
@@ -229,10 +270,9 @@ private suspend fun completeLogAndSnackbar(
                 duration = SnackbarDuration.Short
             )
             if (snackResult == SnackbarResult.ActionPerformed && row != null) {
-                val deleted = backendService.deleteEvents(googleSheetUrl, listOf(row))
+                val deleted = repository.deleteEvents(listOf(row))
                 if (deleted) {
-                    refreshStats()
-                    updateAllWidgets()
+                    snackbarHostState.showSnackbar("Undo complete")
                 }
             }
             true
@@ -251,6 +291,7 @@ private suspend fun completeLogAndSnackbar(
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        BabySyncScheduler.ensureScheduled(this)
         setContent {
             BabyNeedsCounterTheme {
                 AppNavigation()
@@ -271,50 +312,7 @@ class MainActivity : ComponentActivity() {
     }
     
     private fun updateAllWidgets() {
-        try {
-            val appWidgetManager = AppWidgetManager.getInstance(this)
-            
-            // Update stats widget
-            val statsWidgetIds = appWidgetManager.getAppWidgetIds(
-                ComponentName(this, BabyStatsWidget::class.java)
-            )
-            if (statsWidgetIds.isNotEmpty()) {
-                val statsIntent = Intent(this, BabyStatsWidget::class.java).apply {
-                    action = AppWidgetManager.ACTION_APPWIDGET_UPDATE
-                    putExtra(AppWidgetManager.EXTRA_APPWIDGET_IDS, statsWidgetIds)
-                }
-                sendBroadcast(statsIntent)
-                Log.d("MainActivity", "Triggered stats widget update for ${statsWidgetIds.size} widget(s)")
-            }
-            
-            // Update logging widget
-            val loggingWidgetIds = appWidgetManager.getAppWidgetIds(
-                ComponentName(this, BabyLoggingWidget::class.java)
-            )
-            if (loggingWidgetIds.isNotEmpty()) {
-                val loggingIntent = Intent(this, BabyLoggingWidget::class.java).apply {
-                    action = AppWidgetManager.ACTION_APPWIDGET_UPDATE
-                    putExtra(AppWidgetManager.EXTRA_APPWIDGET_IDS, loggingWidgetIds)
-                }
-                sendBroadcast(loggingIntent)
-                Log.d("MainActivity", "Triggered logging widget update for ${loggingWidgetIds.size} widget(s)")
-            }
-            
-            // Update feed times widget
-            val feedTimesWidgetIds = appWidgetManager.getAppWidgetIds(
-                ComponentName(this, BabyFeedTimesWidget::class.java)
-            )
-            if (feedTimesWidgetIds.isNotEmpty()) {
-                val feedTimesIntent = Intent(this, BabyFeedTimesWidget::class.java).apply {
-                    action = AppWidgetManager.ACTION_APPWIDGET_UPDATE
-                    putExtra(AppWidgetManager.EXTRA_APPWIDGET_IDS, feedTimesWidgetIds)
-                }
-                sendBroadcast(feedTimesIntent)
-                Log.d("MainActivity", "Triggered feed times widget update for ${feedTimesWidgetIds.size} widget(s)")
-            }
-        } catch (e: Exception) {
-            Log.e("MainActivity", "Error updating widgets", e)
-        }
+        WidgetUpdater.requestUpdateAll(this)
     }
 }
 
@@ -325,17 +323,13 @@ fun AppNavigation() {
     Scaffold { innerPadding ->
         NavHost(
             navController = navController,
-            startDestination = "home",
+            startDestination = "main",
             modifier = Modifier.padding(innerPadding)
         ) {
-            composable("home") {
-                HomeScreen(
-                    onSettingsClick = { navController.navigate("settings") },
-                    onInsightsClick = { navController.navigate("insights") }
+            composable("main") {
+                HomeInsightsPagerScreen(
+                    onSettingsClick = { navController.navigate("settings") }
                 )
-            }
-            composable("insights") {
-                InsightsScreen(onNavigateBack = { navController.popBackStack() })
             }
             composable("settings") {
                 SettingsScreen(onBackClick = { navController.popBackStack() })
@@ -350,7 +344,15 @@ fun HomeScreen(
     onSettingsClick: () -> Unit,
     onInsightsClick: () -> Unit,
 ) {
+    val context = LocalContext.current
+    val settingsManager = remember { SettingsManager(context) }
+    val repository = remember { BabyRepository(context) }
+    val googleSheetUrl by settingsManager.googleSheetUrl.collectAsState(initial = "")
     val snackbarHostState = remember { SnackbarHostState() }
+
+    LaunchedEffect(googleSheetUrl) {
+        repository.setSourceUrl(googleSheetUrl)
+    }
     
     Scaffold(
         modifier = Modifier.fillMaxSize(),
@@ -384,6 +386,7 @@ fun HomeScreen(
         snackbarHost = { SnackbarHost(snackbarHostState) }
     ) { innerPadding ->
         BabyNeedsLogger(
+            repository = repository,
             modifier = Modifier.padding(innerPadding),
             snackbarHostState = snackbarHostState
         )
@@ -393,19 +396,16 @@ fun HomeScreen(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BabyNeedsLogger(
+    repository: BabyRepository,
     modifier: Modifier = Modifier,
     snackbarHostState: SnackbarHostState = remember { SnackbarHostState() }
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val settingsManager = remember { SettingsManager(context) }
-    val backendService = remember { BackendService(context) }
-    val googleSheetUrl by settingsManager.googleSheetUrl.collectAsState(initial = "")
+    val uiState by repository.uiState.collectAsState()
+    val googleSheetUrl = uiState.currentSourceUrl
     
     var isLoading by remember { mutableStateOf(false) }
-    var isRefreshing by remember { mutableStateOf(false) }
-    var todayStats by remember { mutableStateOf<BackendService.TodayStats?>(null) }
-    var lastRefresh by remember { mutableStateOf(0L) }
     var homeSheet by remember { mutableStateOf<HomeSheet?>(null) }
     var flashActivity by remember { mutableStateOf<ActivityQuickKind?>(null) }
     var sleepFlash by remember { mutableStateOf(false) }
@@ -443,6 +443,9 @@ fun BabyNeedsLogger(
         }
     }
     
+    val todayStats = uiState.homeStats
+    val isRefreshing = uiState.isRefreshing
+    val showInitialHomeState = todayStats == null && !uiState.hasCachedContent
     val sleeping = todayStats?.isSleeping() == true
     LaunchedEffect(todayStats?.lastSleepEventTimeISO, todayStats?.lastSleepEventType) {
         if (todayStats?.lastSleepEventTimeISO != null) {
@@ -453,112 +456,6 @@ fun BabyNeedsLogger(
         }
     }
     
-    // Function to refresh stats
-    val refreshStats: () -> Unit = {
-        scope.launch {
-            if (googleSheetUrl.isNotEmpty()) {
-                try {
-                    isRefreshing = true
-                    val stats = backendService.fetchTodayStats(googleSheetUrl, useCache = true)
-                    if (stats != null) {
-                        todayStats = stats
-                        lastRefresh = System.currentTimeMillis()
-                    }
-                } finally {
-                    isRefreshing = false
-                }
-            }
-        }
-    }
-    
-    // Load cached stats immediately on launch
-    LaunchedEffect(Unit) {
-        val cached = backendService.getCachedStats()
-        if (cached != null) {
-            Log.d("BabyNeeds", "Loaded cached stats on launch")
-            todayStats = cached
-        }
-    }
-    
-    // Refresh stats on launch and when URL changes
-    LaunchedEffect(googleSheetUrl) {
-        refreshStats()
-    }
-    
-    // Refresh stats when screen becomes visible (lifecycle aware)
-    val lifecycleOwner = LocalLifecycleOwner.current
-    DisposableEffect(lifecycleOwner) {
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) {
-                Log.d("BabyNeeds", "Screen resumed - refreshing stats")
-                refreshStats()
-            }
-        }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose {
-            lifecycleOwner.lifecycle.removeObserver(observer)
-        }
-    }
-    
-    // Periodic refresh every 15 seconds while app is active (tighter tracking)
-    LaunchedEffect(Unit) {
-        while (true) {
-            kotlinx.coroutines.delay(15_000L) // 15 seconds (reduced from 30)
-            if (googleSheetUrl.isNotEmpty() && !isLoading) {
-                Log.d("BabyNeeds", "Periodic stats refresh triggered")
-                refreshStats()
-            }
-        }
-    }
-    
-    // Helper function to update all widgets
-    val updateAllWidgets: () -> Unit = {
-        try {
-            val appWidgetManager = AppWidgetManager.getInstance(context)
-            
-            // Update stats widget
-            val statsWidgetIds = appWidgetManager.getAppWidgetIds(
-                ComponentName(context, BabyStatsWidget::class.java)
-            )
-            if (statsWidgetIds.isNotEmpty()) {
-                val statsIntent = Intent(context, BabyStatsWidget::class.java).apply {
-                    action = AppWidgetManager.ACTION_APPWIDGET_UPDATE
-                    putExtra(AppWidgetManager.EXTRA_APPWIDGET_IDS, statsWidgetIds)
-                }
-                context.sendBroadcast(statsIntent)
-                Log.d("BabyNeeds", "Triggered stats widget update for ${statsWidgetIds.size} widget(s)")
-            }
-            
-            // Update logging widget (if needed)
-            val loggingWidgetIds = appWidgetManager.getAppWidgetIds(
-                ComponentName(context, BabyLoggingWidget::class.java)
-            )
-            if (loggingWidgetIds.isNotEmpty()) {
-                val loggingIntent = Intent(context, BabyLoggingWidget::class.java).apply {
-                    action = AppWidgetManager.ACTION_APPWIDGET_UPDATE
-                    putExtra(AppWidgetManager.EXTRA_APPWIDGET_IDS, loggingWidgetIds)
-                }
-                context.sendBroadcast(loggingIntent)
-                Log.d("BabyNeeds", "Triggered logging widget update for ${loggingWidgetIds.size} widget(s)")
-            }
-            
-            // Update feed times widget
-            val feedTimesWidgetIds = appWidgetManager.getAppWidgetIds(
-                ComponentName(context, BabyFeedTimesWidget::class.java)
-            )
-            if (feedTimesWidgetIds.isNotEmpty()) {
-                val feedTimesIntent = Intent(context, BabyFeedTimesWidget::class.java).apply {
-                    action = AppWidgetManager.ACTION_APPWIDGET_UPDATE
-                    putExtra(AppWidgetManager.EXTRA_APPWIDGET_IDS, feedTimesWidgetIds)
-                }
-                context.sendBroadcast(feedTimesIntent)
-                Log.d("BabyNeeds", "Triggered feed times widget update for ${feedTimesWidgetIds.size} widget(s)")
-            }
-        } catch (e: Exception) {
-            Log.e("BabyNeeds", "Error updating widgets", e)
-        }
-    }
-
     val onQuickFeedTap: () -> Unit = {
         if (!isLoading) {
             scope.launch {
@@ -571,8 +468,8 @@ fun BabyNeedsLogger(
                         ""
                     )
                     val ok = completeLogAndSnackbar(
-                        snackbarHostState, context, backendService, googleSheetUrl,
-                        event, refreshStats, updateAllWidgets
+                        snackbarHostState, context, repository, googleSheetUrl,
+                        event
                     )
                     if (ok) flashActivity = ActivityQuickKind.FEED
                 } finally {
@@ -590,8 +487,8 @@ fun BabyNeedsLogger(
                     val ts = buildEventTimestamp(false, 0, 0)
                     val event = BackendService.BabyEvent(ts, type, "")
                     val ok = completeLogAndSnackbar(
-                        snackbarHostState, context, backendService, googleSheetUrl,
-                        event, refreshStats, updateAllWidgets
+                        snackbarHostState, context, repository, googleSheetUrl,
+                        event
                     )
                     if (ok) sleepFlash = true
                 } finally {
@@ -612,8 +509,8 @@ fun BabyNeedsLogger(
                         ""
                     )
                     val ok = completeLogAndSnackbar(
-                        snackbarHostState, context, backendService, googleSheetUrl,
-                        event, refreshStats, updateAllWidgets
+                        snackbarHostState, context, repository, googleSheetUrl,
+                        event
                     )
                     if (ok) flashActivity = ActivityQuickKind.POOP_PEE
                 } finally {
@@ -634,8 +531,8 @@ fun BabyNeedsLogger(
                         ""
                     )
                     val ok = completeLogAndSnackbar(
-                        snackbarHostState, context, backendService, googleSheetUrl,
-                        event, refreshStats, updateAllWidgets
+                        snackbarHostState, context, repository, googleSheetUrl,
+                        event
                     )
                     if (ok) flashActivity = ActivityQuickKind.PEE
                 } finally {
@@ -646,107 +543,157 @@ fun BabyNeedsLogger(
     }
 
     Box(modifier = modifier.fillMaxSize()) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(MaterialTheme.colorScheme.background)
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.Top,
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            val timeUntilNextFeed = todayStats?.getTimeUntilNextFeed() ?: "—"
-            val lastFeedAgo = todayStats?.getTimeSinceLastFeed() ?: "—"
-            val feedCountToday = todayStats?.feedCount ?: 0
-            val peeCount = todayStats?.peeCount ?: 0
-            val poopCount = todayStats?.poopCount ?: 0
-
-            Column(
+        if (showInitialHomeState) {
+            Card(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .weight(1f),
-                verticalArrangement = Arrangement.spacedBy(HomeCardListSpacing)
+                    .padding(16.dp)
+                    .align(Alignment.Center),
+                shape = RoundedCornerShape(20.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
+                )
             ) {
-                QuickActionCard(
-                    title = "Feeding",
-                    bodyStyle = HomeCardBodyStyle.Feeding(
-                        nextIn = timeUntilNextFeed,
-                        lastAgo = lastFeedAgo,
-                        todayFeedCount = feedCountToday
-                    ),
-                    icon = "",
-                    color = CategoryFeeding,
-                    iconDrawableRes = R.drawable.marshmallow_feed,
-                    showSuccessFlash = flashActivity == ActivityQuickKind.FEED,
-                    enabled = !isLoading,
-                    onQuickTap = onQuickFeedTap,
-                    onEdit = { homeSheet = HomeSheet.ActivityMenu(ActivityQuickKind.FEED) },
-                    modifier = Modifier.fillMaxWidth(),
-                    compactList = true,
-                    titleTrailing = {
-                        if (isRefreshing) {
-                            CircularProgressIndicator(
-                                modifier = Modifier
-                                    .padding(start = 8.dp)
-                                    .size(18.dp),
-                                strokeWidth = 2.dp,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                        }
+                Column(
+                    modifier = Modifier.padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    if (isRefreshing) {
+                        CircularProgressIndicator(modifier = Modifier.size(40.dp))
+                        Text(
+                            text = "Loading your latest baby status…",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            textAlign = TextAlign.Center
+                        )
+                        Text(
+                            text = "Once the first sync completes, Home will open straight into your last known state.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = TextSecondary,
+                            textAlign = TextAlign.Center
+                        )
+                    } else {
+                        Text(
+                            text = if (googleSheetUrl.isBlank()) "Set up your sheet in Settings to start tracking." else "No local data yet.",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            textAlign = TextAlign.Center
+                        )
+                        Text(
+                            text = if (googleSheetUrl.isBlank()) "After setup, the app will cache the latest state for instant startup." else "Pull to refresh or wait for the first sync to finish.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = TextSecondary,
+                            textAlign = TextAlign.Center
+                        )
                     }
-                )
-                SleepQuickCard(
-                    todayStats = todayStats,
-                    sleepDurationTick = sleepDurationTick,
-                    showSuccessFlash = sleepFlash,
-                    enabled = !isLoading,
-                    onQuickTap = onQuickSleepTap,
-                    onEdit = { homeSheet = HomeSheet.SleepMenu },
-                    onSleepWindowTap = {
-                        scope.launch {
-                            snackbarHostState.showSnackbar("Sleep window — coming soon")
+                }
+            }
+        } else {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(MaterialTheme.colorScheme.background)
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.Top,
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                val timeUntilNextFeed = todayStats?.getTimeUntilNextFeed() ?: "—"
+                val nextFeedAt = todayStats?.getNextFeedTime() ?: "—"
+                val lastFeedAgo = todayStats?.getTimeSinceLastFeed() ?: "—"
+                val feedCountToday = todayStats?.feedCount ?: 0
+                val peeCount = todayStats?.peeCount ?: 0
+                val poopCount = todayStats?.poopCount ?: 0
+
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(HomeCardListSpacing)
+                ) {
+                    QuickActionCard(
+                        title = "Next feed",
+                        bodyStyle = HomeCardBodyStyle.Feeding(
+                            nextAt = nextFeedAt,
+                            nextIn = timeUntilNextFeed,
+                            lastAgo = lastFeedAgo,
+                            todayFeedCount = feedCountToday
+                        ),
+                        icon = "",
+                        color = CategoryFeeding,
+                        iconDrawableRes = R.drawable.marshmallow_feed,
+                        showSuccessFlash = flashActivity == ActivityQuickKind.FEED,
+                        enabled = !isLoading,
+                        onQuickTap = onQuickFeedTap,
+                        onEdit = { homeSheet = HomeSheet.ActivityMenu(ActivityQuickKind.FEED) },
+                        modifier = Modifier.fillMaxWidth(),
+                        compactList = true,
+                        titleTrailing = {
+                            if (isRefreshing) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier
+                                        .padding(start = 8.dp)
+                                        .size(18.dp),
+                                    strokeWidth = 2.dp,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
                         }
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                    compactList = true,
-                )
-                QuickActionCard(
-                    title = "Poop",
-                        bodyStyle = HomeCardBodyStyle.Diaper(
-                            diaperHomeSummaryLine(
-                                poopCount,
-                                todayStats?.lastPoopTimeISO,
-                                todayStats?.getLastPoopClock() ?: "—"
-                            )
-                        ),
-                    icon = "",
-                    color = CategoryPoop,
-                    iconDrawableRes = R.drawable.marshmallow_poop,
-                    showSuccessFlash = flashActivity == ActivityQuickKind.POOP_PEE,
-                    enabled = !isLoading,
-                    onQuickTap = onQuickPoopTap,
-                    onEdit = { homeSheet = HomeSheet.ActivityMenu(ActivityQuickKind.POOP_PEE) },
-                    modifier = Modifier.fillMaxWidth(),
-                    compactList = true
-                )
-                QuickActionCard(
-                    title = "Pee",
-                        bodyStyle = HomeCardBodyStyle.Diaper(
-                            diaperHomeSummaryLine(
-                                peeCount,
-                                todayStats?.lastPeeTimeISO,
-                                todayStats?.getLastPeeClock() ?: "—"
-                            )
-                        ),
-                    icon = "",
-                    color = CategoryPee,
-                    iconDrawableRes = R.drawable.marshmallow_pee,
-                    showSuccessFlash = flashActivity == ActivityQuickKind.PEE,
-                    enabled = !isLoading,
-                    onQuickTap = onQuickPeeTap,
-                    onEdit = { homeSheet = HomeSheet.ActivityMenu(ActivityQuickKind.PEE) },
-                    modifier = Modifier.fillMaxWidth(),
-                    compactList = true
-                )
+                    )
+                    SleepQuickCard(
+                        todayStats = todayStats,
+                        sleepDurationTick = sleepDurationTick,
+                        showSuccessFlash = sleepFlash,
+                        enabled = !isLoading,
+                        onQuickTap = onQuickSleepTap,
+                        onEdit = { homeSheet = HomeSheet.SleepMenu },
+                        onSleepWindowTap = {
+                            scope.launch {
+                                snackbarHostState.showSnackbar("Sleep window — coming soon")
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        compactList = true,
+                    )
+                    QuickActionCard(
+                        title = "Poop",
+                            bodyStyle = HomeCardBodyStyle.Diaper(
+                                diaperHomeSummaryLine(
+                                    poopCount,
+                                    todayStats?.lastPoopTimeISO,
+                                    todayStats?.getLastPoopClock() ?: "—"
+                                )
+                            ),
+                        icon = "",
+                        color = CategoryPoop,
+                        iconDrawableRes = R.drawable.marshmallow_poop,
+                        showSuccessFlash = flashActivity == ActivityQuickKind.POOP_PEE,
+                        enabled = !isLoading,
+                        onQuickTap = onQuickPoopTap,
+                        onEdit = { homeSheet = HomeSheet.ActivityMenu(ActivityQuickKind.POOP_PEE) },
+                        modifier = Modifier.fillMaxWidth(),
+                        compactList = true
+                    )
+                    QuickActionCard(
+                        title = "Pee",
+                            bodyStyle = HomeCardBodyStyle.Diaper(
+                                diaperHomeSummaryLine(
+                                    peeCount,
+                                    todayStats?.lastPeeTimeISO,
+                                    todayStats?.getLastPeeClock() ?: "—"
+                                )
+                            ),
+                        icon = "",
+                        color = CategoryPee,
+                        iconDrawableRes = R.drawable.marshmallow_pee,
+                        showSuccessFlash = flashActivity == ActivityQuickKind.PEE,
+                        enabled = !isLoading,
+                        onQuickTap = onQuickPeeTap,
+                        onEdit = { homeSheet = HomeSheet.ActivityMenu(ActivityQuickKind.PEE) },
+                        modifier = Modifier.fillMaxWidth(),
+                        compactList = true
+                    )
+                }
             }
         }
     }
@@ -832,8 +779,8 @@ fun BabyNeedsLogger(
                                             ""
                                         )
                                         val ok = completeLogAndSnackbar(
-                                            snackbarHostState, context, backendService,
-                                            googleSheetUrl, event, refreshStats, updateAllWidgets
+                                            snackbarHostState, context, repository,
+                                            googleSheetUrl, event
                                         )
                                         if (ok) {
                                             flashActivity = s.kind
@@ -882,8 +829,8 @@ fun BabyNeedsLogger(
                                             noteText.trim()
                                         )
                                         val ok = completeLogAndSnackbar(
-                                            snackbarHostState, context, backendService,
-                                            googleSheetUrl, event, refreshStats, updateAllWidgets
+                                            snackbarHostState, context, repository,
+                                            googleSheetUrl, event
                                         )
                                         if (ok) {
                                             flashActivity = s.kind
@@ -970,8 +917,8 @@ fun BabyNeedsLogger(
                                         val ts = buildEventTimestamp(true, timeHour, timeMinute)
                                         val event = BackendService.BabyEvent(ts, nextEmoji, "")
                                         val ok = completeLogAndSnackbar(
-                                            snackbarHostState, context, backendService,
-                                            googleSheetUrl, event, refreshStats, updateAllWidgets
+                                            snackbarHostState, context, repository,
+                                            googleSheetUrl, event
                                         )
                                         if (ok) {
                                             sleepFlash = true
@@ -1021,8 +968,8 @@ fun BabyNeedsLogger(
                                             noteText.trim()
                                         )
                                         val ok = completeLogAndSnackbar(
-                                            snackbarHostState, context, backendService,
-                                            googleSheetUrl, event, refreshStats, updateAllWidgets
+                                            snackbarHostState, context, repository,
+                                            googleSheetUrl, event
                                         )
                                         if (ok) {
                                             sleepFlash = true
@@ -1057,6 +1004,7 @@ private val CompactCardPaddingStart = 12.dp
 private val CompactCardPaddingEnd = 6.dp
 private val CompactCardPaddingVertical = 12.dp
 private val HomeCardListSpacing = 16.dp
+private val AvatarMaskShape = RoundedCornerShape(40)
 
 /**
  * Home card: [icon column | text column] (tap to log) + right-aligned edit hit target, vertically centered.
@@ -1105,6 +1053,8 @@ private fun QuickLogCardLayout(
     val sleepStateLineH = if (compactList) 13.sp else 17.sp
     val sleepDurationSp = if (compactList) 32.sp else 26.sp
     val sleepDurationLineH = if (compactList) 34.sp else 28.sp
+    val sleepMetaSp = if (compactList) 11.sp else 13.sp
+    val sleepMetaLineH = if (compactList) 12.sp else 14.sp
     val diaperLineSp = if (compactList) 14.sp else 16.sp
     val diaperLineH = if (compactList) 15.sp else 17.sp
     val standardSubSp = if (compactList) 14.sp else 14.sp
@@ -1172,6 +1122,8 @@ private fun QuickLogCardLayout(
                                 contentDescription = null,
                                 modifier = Modifier
                                     .fillMaxSize()
+                                    .padding(if (compactList) 4.dp else 6.dp)
+                                    .clip(AvatarMaskShape)
                                     .background(Color.Transparent),
                                 contentScale = ContentScale.Fit
                             )
@@ -1213,7 +1165,7 @@ private fun QuickLogCardLayout(
                             is HomeCardBodyStyle.Feeding -> {
                                 if (compactFeedLayout) {
                                     Text(
-                                        text = bodyStyle.nextIn,
+                                        text = bodyStyle.nextAt,
                                         fontSize = feedPrimary,
                                         fontWeight = FontWeight.SemiBold,
                                         lineHeight = feedPrimaryLineH,
@@ -1223,6 +1175,7 @@ private fun QuickLogCardLayout(
                                     )
                                     Text(
                                         text = formatCompactFeedMetaLine(
+                                            nextIn = bodyStyle.nextIn,
                                             lastAgo = bodyStyle.lastAgo,
                                             todayFeedCount = bodyStyle.todayFeedCount
                                         ),
@@ -1234,7 +1187,7 @@ private fun QuickLogCardLayout(
                                     )
                                 } else {
                                     Text(
-                                        text = "Next in ${bodyStyle.nextIn}",
+                                        text = bodyStyle.nextAt,
                                         fontSize = feedPrimary,
                                         fontWeight = FontWeight.SemiBold,
                                         lineHeight = feedPrimaryLineH,
@@ -1243,7 +1196,11 @@ private fun QuickLogCardLayout(
                                         overflow = TextOverflow.Ellipsis
                                     )
                                     Text(
-                                        text = "${formatLastFeedSecondaryLine(bodyStyle.lastAgo)} · Today: ${bodyStyle.todayFeedCount} feeds",
+                                        text = formatFeedDetailLine(
+                                            nextIn = bodyStyle.nextIn,
+                                            lastAgo = bodyStyle.lastAgo,
+                                            todayFeedCount = bodyStyle.todayFeedCount
+                                        ),
                                         fontSize = feedSecondary,
                                         lineHeight = feedSecondaryLineH,
                                         color = TextSecondary,
@@ -1267,6 +1224,14 @@ private fun QuickLogCardLayout(
                                     fontWeight = FontWeight.Bold,
                                     lineHeight = sleepDurationLineH,
                                     color = MaterialTheme.colorScheme.onSurface,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    text = bodyStyle.previousSleepLine,
+                                    fontSize = sleepMetaSp,
+                                    lineHeight = sleepMetaLineH,
+                                    color = TextSecondary,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
                                 )
@@ -1393,7 +1358,8 @@ fun SleepQuickCard(
         val state = if (sleeping) "Sleeping" else "Awake"
         HomeCardBodyStyle.Sleep(
             state = state,
-            duration = sleepDurationPrimaryLine(todayStats, sleeping, awakeFromLastWake)
+            duration = sleepDurationPrimaryLine(todayStats, sleeping, awakeFromLastWake),
+            previousSleepLine = formatPreviousSleepLine(todayStats?.previousSleepDurationLabel)
         )
     }
     QuickLogCardLayout(
@@ -1526,6 +1492,9 @@ fun NumberPicker(
 @Composable
 fun BabyNeedsLoggerPreview() {
     BabyNeedsCounterTheme {
-        BabyNeedsLogger()
+        Text(
+            text = "Preview unavailable for repository-backed Home screen",
+            modifier = Modifier.padding(24.dp)
+        )
     }
 }

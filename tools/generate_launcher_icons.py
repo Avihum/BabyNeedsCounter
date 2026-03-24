@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import deque
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageChops, ImageDraw
 
 PROJECT = Path(__file__).resolve().parent.parent
 RES = PROJECT / "app/src/main/res"
@@ -24,6 +24,8 @@ SIZES = {
 
 # RGB exports often use opaque black instead of alpha; keep real pixels (darkest ~sum 17+).
 _BLACK_KEY_SUM_MAX = 14
+_AVATAR_MASK_INSET_RATIO = 0.045
+_SQUIRCLE_RADIUS_RATIO = 0.30
 
 
 def key_black_to_transparent(img: Image.Image) -> Image.Image:
@@ -39,6 +41,19 @@ def key_black_to_transparent(img: Image.Image) -> Image.Image:
             r, g, b, a = px[x, y]
             if r + g + b <= _BLACK_KEY_SUM_MAX:
                 px[x, y] = (0, 0, 0, 0)
+    return rgba
+
+
+def apply_squircle_mask(img: Image.Image) -> Image.Image:
+    """Clip full-frame avatar art to a soft squircle so square exports don't show hard corners."""
+    rgba = img.convert("RGBA")
+    w, h = rgba.size
+    inset = int(min(w, h) * _AVATAR_MASK_INSET_RATIO)
+    radius = int((min(w, h) - inset * 2) * _SQUIRCLE_RADIUS_RATIO)
+    mask = Image.new("L", (w, h), 0)
+    draw = ImageDraw.Draw(mask)
+    draw.rounded_rectangle((inset, inset, w - inset - 1, h - inset - 1), radius=radius, fill=255)
+    rgba.putalpha(ImageChops.multiply(rgba.getchannel("A"), mask))
     return rgba
 
 
@@ -89,30 +104,30 @@ def strip_baked_checkerboard(rgba: Image.Image) -> Image.Image:
 
 def load_foreground_source() -> Image.Image:
     raw = Image.open(LAUNCHER / "marshmallow_foreground.png")
-    return key_black_to_transparent(raw)
+    return apply_squircle_mask(key_black_to_transparent(raw))
 
 
 def load_sleep_foreground_source() -> Image.Image:
     raw = Image.open(LAUNCHER / "marshmallow_sleep_foreground.png")
-    return key_black_to_transparent(raw)
+    return apply_squircle_mask(key_black_to_transparent(raw))
 
 
 def load_feed_foreground_source() -> Image.Image:
     raw = Image.open(LAUNCHER / "marshmallow_feed_foreground.png")
     rgba = key_black_to_transparent(raw)
-    return strip_baked_checkerboard(rgba)
+    return apply_squircle_mask(strip_baked_checkerboard(rgba))
 
 
 def load_poop_foreground_source() -> Image.Image:
     raw = Image.open(LAUNCHER / "marshmallow_poop_foreground.png")
     rgba = key_black_to_transparent(raw)
-    return strip_baked_checkerboard(rgba)
+    return apply_squircle_mask(strip_baked_checkerboard(rgba))
 
 
 def load_pee_foreground_source() -> Image.Image:
     raw = Image.open(LAUNCHER / "marshmallow_pee_foreground.png")
     rgba = key_black_to_transparent(raw)
-    return strip_baked_checkerboard(rgba)
+    return apply_squircle_mask(strip_baked_checkerboard(rgba))
 
 
 def layer_background() -> Image.Image:
