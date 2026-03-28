@@ -9,9 +9,7 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -55,6 +53,8 @@ private enum class MainSurfacePage(
 @Composable
 fun HomeInsightsPagerScreen(
     onSettingsClick: () -> Unit,
+    widgetOpenTarget: WidgetOpenTarget? = null,
+    onWidgetOpenTargetConsumed: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -75,6 +75,12 @@ fun HomeInsightsPagerScreen(
 
     LaunchedEffect(pagerState.currentPage) {
         savedPage = pagerState.currentPage
+    }
+
+    LaunchedEffect(widgetOpenTarget) {
+        if (widgetOpenTarget != null && pagerState.currentPage != MainSurfacePage.Home.ordinal) {
+            pagerState.animateScrollToPage(MainSurfacePage.Home.ordinal)
+        }
     }
 
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -113,25 +119,6 @@ fun HomeInsightsPagerScreen(
                         }
                     },
                     actions = {
-                        if (uiState.isRefreshing) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.padding(end = 12.dp),
-                                strokeWidth = 2.dp,
-                            )
-                        } else {
-                            IconButton(
-                                onClick = {
-                                    scope.launch {
-                                        val result = repository.refresh(RefreshTrigger.Manual, force = true)
-                                        if (!result.success) {
-                                            snackbarHostState.showSnackbar(result.errorMessage ?: "Refresh failed")
-                                        }
-                                    }
-                                }
-                            ) {
-                                Icon(Icons.Default.Refresh, contentDescription = "Refresh")
-                            }
-                        }
                         IconButton(onClick = onSettingsClick) {
                             Icon(Icons.Default.Settings, contentDescription = "Settings")
                         }
@@ -175,6 +162,8 @@ fun HomeInsightsPagerScreen(
                     repository = repository,
                     modifier = Modifier.fillMaxSize(),
                     snackbarHostState = snackbarHostState,
+                    widgetOpenTarget = widgetOpenTarget,
+                    onWidgetOpenTargetConsumed = onWidgetOpenTargetConsumed,
                 )
 
                 MainSurfacePage.Insights -> InsightsScreen(

@@ -6,8 +6,6 @@ import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import android.content.Intent
-import android.appwidget.AppWidgetManager
-import android.content.ComponentName
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -21,6 +19,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -58,6 +57,9 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
+import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -110,22 +112,9 @@ import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
 import java.util.Locale
-
-private enum class ActivityQuickKind {
-    POOP_PEE, PEE, FEED
-}
-
-private fun ActivityQuickKind.emojiType(): String = when (this) {
-    ActivityQuickKind.POOP_PEE -> "💩💧"
-    ActivityQuickKind.PEE -> "💧"
-    ActivityQuickKind.FEED -> "🐄"
-}
-
-private fun ActivityQuickKind.displayName(): String = when (this) {
-    ActivityQuickKind.POOP_PEE -> "Poop & Pee"
-    ActivityQuickKind.PEE -> "Pee"
-    ActivityQuickKind.FEED -> "Feed"
-}
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 private sealed class HomeSheet {
     data class ActivityMenu(val kind: ActivityQuickKind) : HomeSheet()
@@ -147,24 +136,6 @@ sealed class HomeCardBodyStyle {
     ) : HomeCardBodyStyle()
     data class Sleep(val state: String, val duration: String, val previousSleepLine: String) : HomeCardBodyStyle()
     data class Diaper(val line: String) : HomeCardBodyStyle()
-}
-
-private fun sleepDurationPrimaryLine(
-    todayStats: BackendService.TodayStats?,
-    sleeping: Boolean,
-    awakeFromLastWake: Boolean,
-): String {
-    if (todayStats == null) return "—"
-    return when {
-        sleeping -> todayStats.getSleepDurationLabel()
-        awakeFromLastWake -> todayStats.getAwakeDurationLabel()
-        else -> "—"
-    }
-}
-
-private fun formatPreviousSleepLine(previousSleepDurationLabel: String?): String {
-    val label = previousSleepDurationLabel?.takeIf { it.isNotBlank() } ?: "—"
-    return "Previous sleep cycle: $label"
 }
 
 /** One line: today count + last clock time or "none today". */
@@ -229,11 +200,6 @@ private fun derivePreviousSleepDurationLabel(events: List<BackendService.EventIt
 private fun deriveLatestEventIso(events: List<BackendService.EventItem>, marker: String): String? =
     events.firstOrNull { it.type.contains(marker) }?.timestamp
 
-/** Sheet emoji (column B) + short UI label for dialogs — never use legacy text for new logs. */
-private fun nextSleepEvent(isSleeping: Boolean): Pair<String, String> =
-    if (isSleeping) SheetEventMarkers.SLEEP_ENDED to "wake-up"
-    else SheetEventMarkers.SLEEP_STARTED to "sleep start"
-
 private fun buildEventTimestamp(useCustom: Boolean, hour: Int, minute: Int): String {
     return if (useCustom) {
         val cal = Calendar.getInstance()
@@ -289,14 +255,26 @@ private suspend fun completeLogAndSnackbar(
 }
 
 class MainActivity : ComponentActivity() {
+    private val widgetOpenTarget = MutableStateFlow<WidgetOpenTarget?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         BabySyncScheduler.ensureScheduled(this)
+        handleWidgetOpenIntent(intent)
         setContent {
             BabyNeedsCounterTheme {
-                AppNavigation()
+                AppNavigation(
+                    widgetOpenTarget = widgetOpenTarget.asStateFlow(),
+                    onWidgetOpenTargetConsumed = { widgetOpenTarget.value = null },
+                )
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleWidgetOpenIntent(intent)
     }
     
     override fun onResume() {
@@ -314,11 +292,22 @@ class MainActivity : ComponentActivity() {
     private fun updateAllWidgets() {
         WidgetUpdater.requestUpdateAll(this)
     }
+
+    private fun handleWidgetOpenIntent(intent: Intent?) {
+        WidgetNavigation.extractOpenTarget(intent)?.let { target ->
+            widgetOpenTarget.value = target
+            intent?.removeExtra(WidgetNavigation.EXTRA_OPEN_TARGET)
+        }
+    }
 }
 
 @Composable
-fun AppNavigation() {
+fun AppNavigation(
+    widgetOpenTarget: StateFlow<WidgetOpenTarget?>,
+    onWidgetOpenTargetConsumed: () -> Unit,
+) {
     val navController = rememberNavController()
+    val currentWidgetOpenTarget by widgetOpenTarget.collectAsState()
 
     Scaffold { innerPadding ->
         NavHost(
@@ -328,7 +317,9 @@ fun AppNavigation() {
         ) {
             composable("main") {
                 HomeInsightsPagerScreen(
-                    onSettingsClick = { navController.navigate("settings") }
+                    onSettingsClick = { navController.navigate("settings") },
+                    widgetOpenTarget = currentWidgetOpenTarget,
+                    onWidgetOpenTargetConsumed = onWidgetOpenTargetConsumed,
                 )
             }
             composable("settings") {
@@ -398,7 +389,9 @@ fun HomeScreen(
 fun BabyNeedsLogger(
     repository: BabyRepository,
     modifier: Modifier = Modifier,
-    snackbarHostState: SnackbarHostState = remember { SnackbarHostState() }
+    snackbarHostState: SnackbarHostState = remember { SnackbarHostState() },
+    widgetOpenTarget: WidgetOpenTarget? = null,
+    onWidgetOpenTargetConsumed: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -442,11 +435,29 @@ fun BabyNeedsLogger(
             else -> {}
         }
     }
+
+    LaunchedEffect(widgetOpenTarget) {
+        when (widgetOpenTarget) {
+            WidgetOpenTarget.FEED -> {
+                homeSheet = HomeSheet.ActivityMenu(ActivityQuickKind.FEED)
+                onWidgetOpenTargetConsumed()
+            }
+            WidgetOpenTarget.SLEEP -> {
+                homeSheet = HomeSheet.SleepMenu
+                onWidgetOpenTargetConsumed()
+            }
+            null -> Unit
+        }
+    }
     
     val todayStats = uiState.homeStats
     val isRefreshing = uiState.isRefreshing
     val showInitialHomeState = todayStats == null && !uiState.hasCachedContent
     val sleeping = todayStats?.isSleeping() == true
+    val pullToRefreshState = rememberPullToRefreshState()
+    val pullRevealOffset = with(LocalDensity.current) {
+        (pullToRefreshState.distanceFraction.coerceAtLeast(0f) * PullToRefreshDefaults.PositionalThreshold.toPx()).toDp()
+    }
     LaunchedEffect(todayStats?.lastSleepEventTimeISO, todayStats?.lastSleepEventType) {
         if (todayStats?.lastSleepEventTimeISO != null) {
             while (true) {
@@ -480,12 +491,12 @@ fun BabyNeedsLogger(
     }
     val onQuickSleepTap: () -> Unit = {
         if (!isLoading) {
-            val (type, _) = nextSleepEvent(sleeping)
+            val nextAction = nextSleepToggleAction(sleeping)
             scope.launch {
                 isLoading = true
                 try {
                     val ts = buildEventTimestamp(false, 0, 0)
-                    val event = BackendService.BabyEvent(ts, type, "")
+                    val event = BackendService.BabyEvent(ts, nextAction.eventType, "")
                     val ok = completeLogAndSnackbar(
                         snackbarHostState, context, repository, googleSheetUrl,
                         event
@@ -542,75 +553,108 @@ fun BabyNeedsLogger(
         }
     }
 
-    Box(modifier = modifier.fillMaxSize()) {
-        if (showInitialHomeState) {
-            Card(
+    val onPullToRefresh: () -> Unit = {
+        if (!isRefreshing) {
+            scope.launch {
+                val result = repository.refresh(RefreshTrigger.Manual, force = true)
+                if (!result.success) {
+                    snackbarHostState.showSnackbar(result.errorMessage ?: "Refresh failed")
+                }
+            }
+        }
+    }
+
+    PullToRefreshBox(
+        isRefreshing = isRefreshing,
+        onRefresh = onPullToRefresh,
+        state = pullToRefreshState,
+        modifier = modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background),
+        indicator = {
+            PullToRefreshDefaults.Indicator(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp)
-                    .align(Alignment.Center),
-                shape = RoundedCornerShape(20.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
-                )
+                    .align(Alignment.TopCenter)
+                    .padding(top = 8.dp),
+                isRefreshing = isRefreshing,
+                state = pullToRefreshState,
+                containerColor = MaterialTheme.colorScheme.surface,
+                color = MaterialTheme.colorScheme.primary,
+            )
+        },
+    ) {
+        if (showInitialHomeState) {
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(top = pullRevealOffset),
+                contentPadding = PaddingValues(16.dp),
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                Column(
-                    modifier = Modifier.padding(24.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    if (isRefreshing) {
-                        CircularProgressIndicator(modifier = Modifier.size(40.dp))
-                        Text(
-                            text = "Loading your latest baby status…",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            textAlign = TextAlign.Center
+                item {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(20.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
                         )
-                        Text(
-                            text = "Once the first sync completes, Home will open straight into your last known state.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = TextSecondary,
-                            textAlign = TextAlign.Center
-                        )
-                    } else {
-                        Text(
-                            text = if (googleSheetUrl.isBlank()) "Set up your sheet in Settings to start tracking." else "No local data yet.",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            textAlign = TextAlign.Center
-                        )
-                        Text(
-                            text = if (googleSheetUrl.isBlank()) "After setup, the app will cache the latest state for instant startup." else "Pull to refresh or wait for the first sync to finish.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = TextSecondary,
-                            textAlign = TextAlign.Center
-                        )
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(24.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            if (isRefreshing) {
+                                CircularProgressIndicator(modifier = Modifier.size(40.dp))
+                                Text(
+                                    text = "Loading your latest baby status…",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                    textAlign = TextAlign.Center
+                                )
+                                Text(
+                                    text = "Once the first sync completes, Home will open straight into your last known state.",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = TextSecondary,
+                                    textAlign = TextAlign.Center
+                                )
+                            } else {
+                                Text(
+                                    text = if (googleSheetUrl.isBlank()) "Set up your sheet in Settings to start tracking." else "No local data yet.",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                    textAlign = TextAlign.Center
+                                )
+                                Text(
+                                    text = if (googleSheetUrl.isBlank()) "After setup, the app will cache the latest state for instant startup." else "Pull to refresh or wait for the first sync to finish.",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = TextSecondary,
+                                    textAlign = TextAlign.Center
+                                )
+                            }
+                        }
                     }
                 }
             }
         } else {
-            Column(
+            val timeUntilNextFeed = todayStats?.getTimeUntilNextFeed() ?: "—"
+            val nextFeedAt = todayStats?.getNextFeedTime() ?: "—"
+            val lastFeedAgo = todayStats?.getTimeSinceLastFeed() ?: "—"
+            val feedCountToday = todayStats?.feedCount ?: 0
+            val peeCount = todayStats?.peeCount ?: 0
+            val poopCount = todayStats?.poopCount ?: 0
+
+            LazyColumn(
                 modifier = Modifier
                     .fillMaxSize()
                     .background(MaterialTheme.colorScheme.background)
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
-                verticalArrangement = Arrangement.Top,
+                    .padding(top = pullRevealOffset),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(HomeCardListSpacing),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                val timeUntilNextFeed = todayStats?.getTimeUntilNextFeed() ?: "—"
-                val nextFeedAt = todayStats?.getNextFeedTime() ?: "—"
-                val lastFeedAgo = todayStats?.getTimeSinceLastFeed() ?: "—"
-                val feedCountToday = todayStats?.feedCount ?: 0
-                val peeCount = todayStats?.peeCount ?: 0
-                val poopCount = todayStats?.poopCount ?: 0
-
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(HomeCardListSpacing)
-                ) {
+                item {
                     QuickActionCard(
                         title = "Next feed",
                         bodyStyle = HomeCardBodyStyle.Feeding(
@@ -627,19 +671,10 @@ fun BabyNeedsLogger(
                         onQuickTap = onQuickFeedTap,
                         onEdit = { homeSheet = HomeSheet.ActivityMenu(ActivityQuickKind.FEED) },
                         modifier = Modifier.fillMaxWidth(),
-                        compactList = true,
-                        titleTrailing = {
-                            if (isRefreshing) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier
-                                        .padding(start = 8.dp)
-                                        .size(18.dp),
-                                    strokeWidth = 2.dp,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                            }
-                        }
+                        compactList = true
                     )
+                }
+                item {
                     SleepQuickCard(
                         todayStats = todayStats,
                         sleepDurationTick = sleepDurationTick,
@@ -655,6 +690,8 @@ fun BabyNeedsLogger(
                         modifier = Modifier.fillMaxWidth(),
                         compactList = true,
                     )
+                }
+                item {
                     QuickActionCard(
                         title = "Poop",
                             bodyStyle = HomeCardBodyStyle.Diaper(
@@ -674,6 +711,8 @@ fun BabyNeedsLogger(
                         modifier = Modifier.fillMaxWidth(),
                         compactList = true
                     )
+                }
+                item {
                     QuickActionCard(
                         title = "Pee",
                             bodyStyle = HomeCardBodyStyle.Diaper(
@@ -869,7 +908,7 @@ fun BabyNeedsLogger(
                     }
                 }
                 HomeSheet.SleepTime -> {
-                    val (nextEmoji, logLabel) = nextSleepEvent(sleeping)
+                    val nextAction = nextSleepToggleAction(sleeping)
                     Column(
                         Modifier
                             .fillMaxWidth()
@@ -877,7 +916,7 @@ fun BabyNeedsLogger(
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         Text(
-                            "Log $logLabel",
+                            "Log ${nextAction.label}",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold
                         )
@@ -915,7 +954,7 @@ fun BabyNeedsLogger(
                                     isLoading = true
                                     try {
                                         val ts = buildEventTimestamp(true, timeHour, timeMinute)
-                                        val event = BackendService.BabyEvent(ts, nextEmoji, "")
+                                        val event = BackendService.BabyEvent(ts, nextAction.eventType, "")
                                         val ok = completeLogAndSnackbar(
                                             snackbarHostState, context, repository,
                                             googleSheetUrl, event
@@ -938,10 +977,10 @@ fun BabyNeedsLogger(
                     }
                 }
                 HomeSheet.SleepNote -> {
-                    val (nextEmoji, noteLabel) = nextSleepEvent(sleeping)
+                    val nextAction = nextSleepToggleAction(sleeping)
                     Column(Modifier.padding(16.dp)) {
                         Text(
-                            "Note for $noteLabel",
+                            "Note for ${nextAction.label}",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold
                         )
@@ -964,7 +1003,7 @@ fun BabyNeedsLogger(
                                         val ts = buildEventTimestamp(false, 0, 0)
                                         val event = BackendService.BabyEvent(
                                             ts,
-                                            nextEmoji,
+                                            nextAction.eventType,
                                             noteText.trim()
                                         )
                                         val ok = completeLogAndSnackbar(

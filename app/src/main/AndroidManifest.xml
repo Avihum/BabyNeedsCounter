@@ -26,40 +26,52 @@
             </intent-filter>
         </activity>
 
-        <!-- Stats Widget - View today's counts -->
         <receiver
-            android:name=".BabyStatsWidget"
+            android:name=".WidgetActionReceiver"
+            android:exported="false" />
+
+        <receiver
+            android:name=".FeedSmallWidget"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
             </intent-filter>
             <meta-data
                 android:name="android.appwidget.provider"
-                android:resource="@xml/widget_stats_info" />
+                android:resource="@xml/widget_feed_small_info" />
         </receiver>
 
-        <!-- Logging Widget - Quick action buttons -->
         <receiver
-            android:name=".BabyLoggingWidget"
+            android:name=".FeedLargeWidget"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
             </intent-filter>
             <meta-data
                 android:name="android.appwidget.provider"
-                android:resource="@xml/widget_logging_info" />
+                android:resource="@xml/widget_feed_large_info" />
         </receiver>
 
-        <!-- Feed Times Widget - Previous and next feeding times -->
         <receiver
-            android:name=".BabyFeedTimesWidget"
+            android:name=".SleepSmallWidget"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
             </intent-filter>
             <meta-data
                 android:name="android.appwidget.provider"
-                android:resource="@xml/widget_feed_times_info" />
+                android:resource="@xml/widget_sleep_small_info" />
+        </receiver>
+
+        <receiver
+            android:name=".SleepLargeWidget"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_sleep_large_info" />
         </receiver>
     </application>
 

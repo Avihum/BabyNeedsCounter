@@ -22,6 +22,23 @@ import kotlinx.coroutines.sync.withLock
 object SyncConfig {
     const val PERIODIC_REFRESH_MINUTES = 15L
     const val FOREGROUND_REFRESH_DEBOUNCE_MS = 60_000L
+    const val WIDGET_REFRESH_DEBOUNCE_MS = 60_000L
+}
+
+internal object RefreshDebouncePolicy {
+    fun shouldDebounce(
+        trigger: RefreshTrigger,
+        lastAttemptAt: Long?,
+        nowMs: Long,
+    ): Boolean {
+        val debounceMs = when (trigger) {
+            RefreshTrigger.Resume -> SyncConfig.FOREGROUND_REFRESH_DEBOUNCE_MS
+            RefreshTrigger.Widget -> SyncConfig.WIDGET_REFRESH_DEBOUNCE_MS
+            else -> return false
+        }
+        val lastAttempt = lastAttemptAt ?: return false
+        return nowMs - lastAttempt < debounceMs
+    }
 }
 
 enum class RefreshTrigger {
@@ -30,6 +47,7 @@ enum class RefreshTrigger {
     Manual,
     Mutation,
     Worker,
+    Widget,
 }
 
 data class RefreshResult(
@@ -56,6 +74,14 @@ data class BabyUiState(
     val hasCachedContent: Boolean
         get() = homeSnapshot != null || recentEvents.isNotEmpty()
 }
+
+data class WidgetHomeSnapshot(
+    val sourceUrl: String,
+    val stats: BackendService.TodayStats?,
+    val hasCachedContent: Boolean,
+    val lastAttemptAt: Long?,
+    val lastSuccessAt: Long?,
+)
 
 class BabyRepository(context: Context) {
     private val appContext = context.applicationContext
@@ -93,11 +119,8 @@ class BabyRepository(context: Context) {
         }
 
         val now = System.currentTimeMillis()
-        if (!force && trigger == RefreshTrigger.Resume) {
-            val lastAttemptAt = _uiState.value.lastAttemptAt ?: 0L
-            if (now - lastAttemptAt < SyncConfig.FOREGROUND_REFRESH_DEBOUNCE_MS) {
-                return RefreshResult(success = true, appliedNetworkUpdate = false)
-            }
+        if (!force && RefreshDebouncePolicy.shouldDebounce(trigger, _uiState.value.lastAttemptAt, now)) {
+            return RefreshResult(success = true, appliedNetworkUpdate = false)
         }
 
         return refreshMutex.withLock {
@@ -179,6 +202,33 @@ class BabyRepository(context: Context) {
         if (sourceUrl.isBlank()) return null
         val cached = statsCache.loadState(sourceUrl)
         return resolveHomeSnapshot(cached.homeSnapshot, cached.eventsSnapshot)?.stats
+    }
+
+    suspend fun widgetSnapshot(): WidgetHomeSnapshot {
+        val sourceUrl = currentSourceUrl.ifBlank { settingsManager.googleSheetUrl.first() }
+        if (sourceUrl.isBlank()) {
+            return WidgetHomeSnapshot(
+                sourceUrl = "",
+                stats = null,
+                hasCachedContent = false,
+                lastAttemptAt = null,
+                lastSuccessAt = null,
+            )
+        }
+
+        val cached = statsCache.loadState(sourceUrl)
+        val resolvedHome = resolveHomeSnapshot(
+            homeSnapshot = cached.homeSnapshot,
+            eventsSnapshot = cached.eventsSnapshot,
+        )
+
+        return WidgetHomeSnapshot(
+            sourceUrl = sourceUrl,
+            stats = resolvedHome?.stats,
+            hasCachedContent = resolvedHome != null || cached.eventsSnapshot?.events?.isNotEmpty() == true,
+            lastAttemptAt = cached.lastAttemptAt,
+            lastSuccessAt = cached.lastSuccessAt,
+        )
     }
 
     suspend fun logEvent(event: BackendService.BabyEvent): BackendService.LogEventResult {

@@ -10,10 +10,10 @@ object WidgetUpdater {
     fun requestUpdateAll(context: Context) {
         try {
             val appWidgetManager = AppWidgetManager.getInstance(context)
-            requestUpdate(context, appWidgetManager, BabyStatsWidget::class.java)
-            requestUpdate(context, appWidgetManager, BabyLoggingWidget::class.java)
-            requestUpdate(context, appWidgetManager, BabyFeedTimesWidget::class.java)
-            requestUpdate(context, appWidgetManager, BabyNeedsWidget::class.java)
+            requestUpdate(context, appWidgetManager, FeedSmallWidget::class.java)
+            requestUpdate(context, appWidgetManager, FeedLargeWidget::class.java)
+            requestUpdate(context, appWidgetManager, SleepSmallWidget::class.java)
+            requestUpdate(context, appWidgetManager, SleepLargeWidget::class.java)
         } catch (e: Exception) {
             Log.e("WidgetUpdater", "Error requesting widget updates", e)
         }
