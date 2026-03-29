@@ -20,9 +20,11 @@ class SettingsManager(private val context: Context) {
         private val WEB_APP_URL_VERIFIED_KEY = booleanPreferencesKey("web_app_url_verified")
         private val VIEW_URL_VERIFIED_KEY = booleanPreferencesKey("view_url_verified")
         
+        private const val DEFAULT_SHEET_ID = "1FnAb9F0Iu3A0DnO4tl1W3NoM0ck5d51buzp72VNIEq4"
+
         // Default URLs
-        private const val DEFAULT_WEB_APP_URL = "https://script.google.com/macros/s/AKfycbzdBPgFab4aHQw72EoItzbM7EBi8R_FglgONYX1BMm4OcgraZt6UlKuSTKieRqgN56dvw/exec"
-        private const val DEFAULT_VIEW_URL = "https://docs.google.com/spreadsheets/d/1JJebe0Go-TE-DpDWVoQQxAAzhj-uIzl_yH9vwLoT6FU/edit?gid=0#gid=0"
+        private const val DEFAULT_WEB_APP_URL = "https://script.google.com/macros/s/AKfycby2KtzVy9fvED4PPdsxyYGdCDlhDvgmPB3fKsdraYbgvO3EwI3WdQNEoSZ9Grnld73U/exec"
+        private const val DEFAULT_VIEW_URL = "https://docs.google.com/spreadsheets/d/$DEFAULT_SHEET_ID/edit?gid=0#gid=0"
     }
     
     val googleSheetUrl: Flow<String> = context.dataStore.data
