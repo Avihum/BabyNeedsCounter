@@ -23,7 +23,7 @@ class SettingsManager(private val context: Context) {
         private const val DEFAULT_SHEET_ID = "1FnAb9F0Iu3A0DnO4tl1W3NoM0ck5d51buzp72VNIEq4"
 
         // Default URLs
-        private const val DEFAULT_WEB_APP_URL = "https://script.google.com/macros/s/AKfycby2KtzVy9fvED4PPdsxyYGdCDlhDvgmPB3fKsdraYbgvO3EwI3WdQNEoSZ9Grnld73U/exec"
+        private const val DEFAULT_WEB_APP_URL = "https://script.google.com/macros/s/AKfycbx03FMSSUv7jgq3P_v7IFJ3U8SuijVJeNwL9LozzwGEmpRLBsID5TzEM509Pb6I619H/exec"
         private const val DEFAULT_VIEW_URL = "https://docs.google.com/spreadsheets/d/$DEFAULT_SHEET_ID/edit?gid=0#gid=0"
     }
     
